@@ -70,13 +70,17 @@ export const placement = createLayout([
     { type: 'Float32', name: 'lineOffsetX' },
     { type: 'Float32', name: 'lineOffsetY' },
     { type: 'Uint8', name: 'writingMode' },
-    { type: 'Uint8', name: 'hidden' }
+    { type: 'Uint8', name: 'hidden' },
+    { type: 'Float32', name: 'shiftX'},
+    { type: 'Float32', name: 'shiftY'}
 ]);
 
 export const symbolInstance = createLayout([
     { type: 'Int16', name: 'anchorX' },
     { type: 'Int16', name: 'anchorY' },
-    { type: 'Int16', name: 'horizontalPlacedTextSymbolIndex' },
+    { type: 'Int16', name: 'rightJustifiedTextSymbolIndex' },
+    { type: 'Int16', name: 'centerJustifiedTextSymbolIndex' },
+    { type: 'Int16', name: 'leftJustifiedTextSymbolIndex' },
     { type: 'Int16', name: 'verticalPlacedTextSymbolIndex' },
     { type: 'Uint16', name: 'key' },
     { type: 'Uint16', name: 'textBoxStartIndex' },
@@ -84,10 +88,16 @@ export const symbolInstance = createLayout([
     { type: 'Uint16', name: 'iconBoxStartIndex' },
     { type: 'Uint16', name: 'iconBoxEndIndex' },
     { type: 'Uint16', name: 'featureIndex' },
-    { type: 'Uint16', name: 'numGlyphVertices' },
+    { type: 'Uint16', name: 'numRightJustifiedGlyphVertices' },
+    { type: 'Uint16', name: 'numCenterJustifiedGlyphVertices' },
+    { type: 'Uint16', name: 'numLeftJustifiedGlyphVertices' },
     { type: 'Uint16', name: 'numVerticalGlyphVertices' },
     { type: 'Uint16', name: 'numIconVertices' },
-    { type: 'Uint32', name: 'crossTileID' }
+    { type: 'Uint32', name: 'crossTileID' },
+    // used for computing dynamic text placement offsets for the different anchors at placement time
+    { type: 'Uint8', name: 'lineCount'},
+    { type: 'Float32', name: 'maxLineLength'},
+    { type: 'Float32', name: 'textBoxScale'}
 ]);
 
 export const glyphOffset = createLayout([

@@ -1764,6 +1764,57 @@
       },
       "property-type": "data-driven"
     },
+    "dynamic-text-anchor": {
+      "type": "array",
+      "value": "string",
+      "values": [
+        "center",
+        "top",
+        "bottom",
+        "left",
+        "right",
+        "top-left",
+        "top-right",
+        "bottom-left",
+        "bottom-right",
+        "auto"
+      ],
+      "requires": [
+        {
+          "!": "text-anchor"
+        },
+        {
+          "!": "text-justification"
+        },
+        {
+            "symbol-placement": [
+                "point"
+            ]
+        }
+      ],
+      "doc": "To increase label density, you can provide an array of text-anchor locations to try placing a label. The order of the anchors in the array is the order in which placement will be attempted. `text-justification` will be chosen automatically based on the placed anchor. `auto` can be used if you do not want to specify which text-anchors to attempt.",
+      "sdk-support": {
+        "basic functionality": {
+          "js": "next",
+          "android": "Not yet supported",
+          "ios": "Not yet supported",
+          "macos": "Not yet supported"
+        },
+        "data-driven styling": {
+          "js": "Not yet supported",
+          "android": "Not yet supported",
+          "ios": "Not yet supported",
+          "macos": "Not yet supported"
+        }
+      },
+      "expression": {
+        "interpolated": false,
+        "parameters": [
+          "zoom"
+        ]
+      },
+      "property-type": "data-constant"
+    },
     "text-anchor": {
       "type": "enum",
       "values": {

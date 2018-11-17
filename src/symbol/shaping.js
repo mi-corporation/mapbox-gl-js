@@ -17,7 +17,7 @@ const WritingMode = {
     horizontalOnly: 3
 };
 
-export { shapeText, shapeIcon, WritingMode };
+export { shapeText, shapeIcon, getAnchorAlignment, WritingMode };
 
 // The position of a glyph relative to the text's anchor point.
 export type PositionedGlyph = {
@@ -36,10 +36,12 @@ export type Shaping = {
     bottom: number,
     left: number,
     right: number,
+    lineCount: number,
+    maxLineLength: number,
     writingMode: 1 | 2
 };
 
-type SymbolAnchor = 'center' | 'left' | 'right' | 'top' | 'bottom' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+export type SymbolAnchor = 'center' | 'left' | 'right' | 'top' | 'bottom' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 type TextJustify = 'left' | 'center' | 'right';
 
 class TaggedString {
@@ -151,17 +153,6 @@ function shapeText(text: Formatted,
         logicalInput.verticalizePunctuation();
     }
 
-    const positionedGlyphs = [];
-    const shaping = {
-        positionedGlyphs,
-        text: logicalInput,
-        top: translate[1],
-        bottom: translate[1],
-        left: translate[0],
-        right: translate[0],
-        writingMode
-    };
-
     let lines: Array<TaggedString>;
 
     const {processBidirectionalText, processStyledBidirectionalText} = rtlTextPlugin;
@@ -199,10 +190,21 @@ function shapeText(text: Formatted,
         lines = breakLines(logicalInput, determineLineBreaks(logicalInput, spacing, maxWidth, glyphs));
     }
 
-    shapeLines(shaping, glyphs, lines, lineHeight, textAnchor, textJustify, writingMode, spacing, verticalHeight);
+    const positionedGlyphs = [];
+    const shaping = {
+        positionedGlyphs,
+        text: logicalInput,
+        top: translate[1],
+        bottom: translate[1],
+        left: translate[0],
+        right: translate[0],
+        lineCount: lines.length,
+        maxLineLength: 0,
+        writingMode
+    };
 
-    if (!positionedGlyphs.length)
-        return false;
+    shapeLines(shaping, glyphs, lines, lineHeight, textAnchor, textJustify, writingMode, spacing, verticalHeight);
+    if (!positionedGlyphs.length) return false;
 
     shaping.text = shaping.text.toString();
     return shaping;
@@ -499,6 +501,7 @@ function shapeLines(shaping: Shaping,
     shaping.bottom = shaping.top + height;
     shaping.left += -horizontalAlign * maxLineLength;
     shaping.right = shaping.left + maxLineLength;
+    shaping.maxLineLength = maxLineLength;
 }
 
 // justify right = 1, left = 0, center = 0.5

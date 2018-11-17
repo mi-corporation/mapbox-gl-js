@@ -1,8 +1,24 @@
 // @flow
 
-import { symbolLayoutAttributes, collisionVertexAttributes, collisionBoxLayout, collisionCircleLayout, dynamicLayoutAttributes } from './symbol_attributes';
+import { symbolLayoutAttributes,
+    collisionVertexAttributes,
+    collisionBoxLayout,
+    collisionCircleLayout,
+    dynamicLayoutAttributes
+} from './symbol_attributes';
 
-import { SymbolLayoutArray, SymbolDynamicLayoutArray, SymbolOpacityArray, CollisionBoxLayoutArray, CollisionCircleLayoutArray, CollisionVertexArray, PlacedSymbolArray, SymbolInstanceArray, GlyphOffsetArray, SymbolLineVertexArray } from '../array_types';
+import { SymbolLayoutArray,
+    SymbolDynamicLayoutArray,
+    SymbolOpacityArray,
+    CollisionBoxLayoutArray,
+    CollisionCircleLayoutArray,
+    CollisionVertexArray,
+    PlacedSymbolArray,
+    SymbolInstanceArray,
+    GlyphOffsetArray,
+    SymbolLineVertexArray
+} from '../array_types';
+
 import Point from '@mapbox/point-geometry';
 import SegmentVector from '../segment';
 import { ProgramConfigurationSet } from '../program_configuration';
@@ -517,7 +533,7 @@ class SymbolBucket implements Bucket {
             lineStartIndex, lineLength, (labelAnchor.segment: any),
             sizeVertex ? sizeVertex[0] : 0, sizeVertex ? sizeVertex[1] : 0,
             lineOffset[0], lineOffset[1],
-            writingMode, (false: any));
+            writingMode, (false: any), 0, 0);
 
         arrays.programConfigurations.populatePaintArrays(arrays.layoutVertexArray.length, feature, feature.index, {});
     }
@@ -709,8 +725,14 @@ class SymbolBucket implements Bucket {
             const symbolInstance = this.symbolInstances.get(i);
             this.featureSortOrder.push(symbolInstance.featureIndex);
 
-            if (symbolInstance.horizontalPlacedTextSymbolIndex >= 0) {
-                this.addIndicesForPlacedTextSymbol(symbolInstance.horizontalPlacedTextSymbolIndex);
+            if (symbolInstance.rightJustifiedTextSymbolIndex >= 0) {
+                this.addIndicesForPlacedTextSymbol(symbolInstance.rightJustifiedTextSymbolIndex);
+            }
+            if (symbolInstance.centerJustifiedTextSymbolIndex >= 0) {
+                this.addIndicesForPlacedTextSymbol(symbolInstance.centerJustifiedTextSymbolIndex);
+            }
+            if (symbolInstance.leftJustifiedTextSymbolIndex >= 0) {
+                this.addIndicesForPlacedTextSymbol(symbolInstance.leftJustifiedTextSymbolIndex);
             }
             if (symbolInstance.verticalPlacedTextSymbolIndex >= 0) {
                 this.addIndicesForPlacedTextSymbol(symbolInstance.verticalPlacedTextSymbolIndex);

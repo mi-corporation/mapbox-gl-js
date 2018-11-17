@@ -3,6 +3,7 @@
 import Point from '@mapbox/point-geometry';
 
 import { GLYPH_PBF_BORDER } from '../style/parse_glyph_pbf';
+import ONE_EM from './one_em';
 
 import type Anchor from './anchor';
 import type {PositionedIcon, Shaping} from './shaping';
@@ -121,9 +122,8 @@ export function getGlyphQuads(anchor: Anchor,
                        feature: Feature,
                        positions: {[string]: {[number]: GlyphPosition}}): Array<SymbolQuad> {
 
-    const oneEm = 24;
     const textRotate = layer.layout.get('text-rotate').evaluate(feature, {}) * Math.PI / 180;
-    const textOffset = layer.layout.get('text-offset').evaluate(feature, {}).map((t) => t * oneEm);
+    const textOffset = layer.layout.get('text-offset').evaluate(feature, {}).map((t) => t * ONE_EM);
 
     const positionedGlyphs = shaping.positionedGlyphs;
     const quads = [];

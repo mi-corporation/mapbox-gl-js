@@ -3,12 +3,16 @@
 import CollisionIndex from './collision_index';
 
 import EXTENT from '../data/extent';
+import ONE_EM from './one_em';
+
 import * as symbolSize from './symbol_size';
 import * as projection from './projection';
+import { getAnchorAlignment } from './shaping';
 import symbolLayerProperties from '../style/style_layer/symbol_style_layer_properties';
 import assert from 'assert';
 import pixelsToTileUnits from '../source/pixels_to_tile_units';
 
+import type { SymbolAnchor } from './shaping';
 import type Transform from '../geo/transform';
 import type StyleLayer from '../style/style_layer';
 import type Tile from '../source/tile';
@@ -61,6 +65,20 @@ class JointPlacement {
     }
 }
 
+function shiftDynamicCollisionBox(collisionBox, textBoxScale, {shiftX, shiftY}) {
+    const {x1, x2, y1, y2, anchorPointX, anchorPointY} = collisionBox;
+
+    return {
+        x1: x1 + (shiftX * textBoxScale),
+        y1: y1 + (shiftY * textBoxScale),
+        x2: x2 + (shiftX * textBoxScale),
+        y2: y2 + (shiftY * textBoxScale),
+        // symbol anchor point stays the same regardless of text-anchor
+        anchorPointX,
+        anchorPointY
+    };
+}
+
 export class RetainedQueryData {
     bucketInstanceId: number;
     featureIndex: FeatureIndex;
@@ -79,6 +97,25 @@ export class RetainedQueryData {
         this.bucketIndex = bucketIndex;
         this.tileID = tileID;
     }
+}
+
+
+const DEFAULT_DYNAMIC_PLACEMENT = [
+    "center",
+    "top",
+    "bottom",
+    "left",
+    "right",
+    "top-left",
+    "top-right",
+    "bottom-left",
+    "bottom-right"
+];
+
+function getAnchorJustification(anchor: string) {
+    // top and bottom anchors will be replaced by an empty string, but both of those
+    // anchors are center justified.
+    return anchor.replace(/top|bottom|-/g, '') || 'center';
 }
 
 class CollisionGroups {
@@ -183,12 +220,12 @@ export class Placement {
             scale: number, textPixelRatio: number, showCollisionBoxes: boolean, holdingForFade: boolean, seenCrossTileIDs: { [string | number]: boolean },
             collisionBoxArray: ?CollisionBoxArray) {
         const layout = bucket.layers[0].layout;
+        const lineHeight = layout.get('text-line-height') * ONE_EM;
 
         const partiallyEvaluatedTextSize = symbolSize.evaluateSizeForZoom(bucket.textSizeData, this.transform.zoom, symbolLayerProperties.layout.properties['text-size']);
 
         const textOptional = layout.get('text-optional');
         const iconOptional = layout.get('icon-optional');
-
         const textAllowOverlap = layout.get('text-allow-overlap');
         const iconAllowOverlap = layout.get('icon-allow-overlap');
         // This logic is similar to the "defaultOpacityState" logic below in updateBucketOpacities
@@ -231,7 +268,7 @@ export class Placement {
                 let placedGlyphBoxes = null;
                 let placedGlyphCircles = null;
                 let placedIconBoxes = null;
-
+                let shiftedCollisionBox = null;
                 let textFeatureIndex = 0;
                 let iconFeatureIndex = 0;
 
@@ -240,15 +277,59 @@ export class Placement {
                 if (collisionArrays.textFeatureIndex) {
                     textFeatureIndex = collisionArrays.textFeatureIndex;
                 }
-                if (collisionArrays.textBox) {
+
+                const {
+                    rightJustifiedTextSymbolIndex,
+                    leftJustifiedTextSymbolIndex,
+                    centerJustifiedTextSymbolIndex,
+                    maxLineLength,
+                    lineCount,
+                    textBoxScale
+                } = symbolInstance;
+                // justify right = 1, left = 0, center = 0.5
+                const justifications = {
+                    "left": leftJustifiedTextSymbolIndex,
+                    "center": centerJustifiedTextSymbolIndex,
+                    "right": rightJustifiedTextSymbolIndex
+                };
+
+                if (collisionArrays.textBox && !layout.get('dynamic-text-anchor')) {
                     placedGlyphBoxes = this.collisionIndex.placeCollisionBox(collisionArrays.textBox,
                             layout.get('text-allow-overlap'), textPixelRatio, posMatrix, collisionGroup.predicate);
                     placeText = placedGlyphBoxes.box.length > 0;
-                    offscreen = offscreen && placedGlyphBoxes.offscreen;
+                } else if (collisionArrays.textBox) {
+                    const dynamicAnchors = layout.get('dynamic-text-anchor');
+                    const anchors = dynamicAnchors[0] === "auto" ? DEFAULT_DYNAMIC_PLACEMENT : dynamicAnchors;
+                    for (const anchor of anchors) {
+                        if (placeText) break;
+                        // Skip center placement on auto mode if there is an icon for this feature
+                        if (collisionArrays.iconBox && dynamicAnchors[0] === "auto" && anchor === "center") continue;
+                        const justification = getAnchorJustification(anchor);
+                        const justifiedPlacedSymbol = justifications[justification];
+                        if (justifiedPlacedSymbol < 0) continue;
+
+                        const {horizontalAlign, verticalAlign} = getAnchorAlignment(anchor);
+                        const shiftX = -horizontalAlign * maxLineLength;
+                        const shiftY = -verticalAlign * lineCount * lineHeight;
+                        shiftedCollisionBox = shiftDynamicCollisionBox(collisionArrays.textBox, textBoxScale, {shiftX, shiftY});
+                        placedGlyphBoxes = this.collisionIndex.placeCollisionBox(shiftedCollisionBox,
+                                layout.get('text-allow-overlap'), textPixelRatio, posMatrix, collisionGroup.predicate);
+                        placeText = placedGlyphBoxes.box.length > 0;
+
+                        if (placeText) {
+                            bucket.text.placedSymbolArray.get(justifiedPlacedSymbol).shiftX = shiftX * textBoxScale;
+                            bucket.text.placedSymbolArray.get(justifiedPlacedSymbol).shiftY = shiftY * textBoxScale;
+                            this.hideUnplacedJustifications(bucket, justification, symbolInstance);
+                            break;
+                        }
+
+                    }
                 }
+
+                offscreen = placedGlyphBoxes && placedGlyphBoxes.offscreen;
                 const textCircles = collisionArrays.textCircles;
                 if (textCircles) {
-                    const placedSymbol = bucket.text.placedSymbolArray.get(symbolInstance.horizontalPlacedTextSymbolIndex);
+                    const placedSymbol = bucket.text.placedSymbolArray.get(justifications.length ? justifications[0].index : -1);
                     const fontSize = symbolSize.evaluateSizeForFeature(bucket.textSizeData, partiallyEvaluatedTextSize, placedSymbol);
                     placedGlyphCircles = this.collisionIndex.placeCollisionCircles(textCircles,
                             layout.get('text-allow-overlap'),
@@ -281,7 +362,11 @@ export class Placement {
                     offscreen = offscreen && placedIconBoxes.offscreen;
                 }
 
-                const iconWithoutText = textOptional || (symbolInstance.numGlyphVertices === 0 && symbolInstance.numVerticalGlyphVertices === 0);
+                const iconWithoutText = textOptional || (
+                    symbolInstance.numCenterJustifiedGlyphVertices === 0 &&
+                                        symbolInstance.numRightJustifiedGlyphVertices === 0 &&
+                                        symbolInstance.numLeftJustifiedGlyphVertices === 0 &&
+                                        symbolInstance.numVerticalGlyphVertices === 0);
                 const textWithoutIcon = iconOptional || symbolInstance.numIconVertices === 0;
 
                 // Combine the scales for icons and text.
@@ -308,13 +393,32 @@ export class Placement {
 
                 assert(symbolInstance.crossTileID !== 0);
                 assert(bucket.bucketInstanceId !== 0);
-
                 this.placements[symbolInstance.crossTileID] = new JointPlacement(placeText || alwaysShowText, placeIcon || alwaysShowIcon, offscreen || bucket.justReloaded);
+
                 seenCrossTileIDs[symbolInstance.crossTileID] = true;
             }
         }
 
         bucket.justReloaded = false;
+    }
+
+    hideUnplacedJustifications(bucket, placedJustification, symbolInstance) {
+        const { leftJustifiedTextSymbolIndex,
+            rightJustifiedTextSymbolIndex,
+            centerJustifiedTextSymbolIndex } = symbolInstance;
+        const instances = [
+            {justification: "left", index: leftJustifiedTextSymbolIndex},
+            {justification: "center", index: centerJustifiedTextSymbolIndex},
+            {justification: "right", index: rightJustifiedTextSymbolIndex}
+        ];
+        for (const i of instances) {
+            if (i.index < 0) continue;
+            // don't hide the placed justification
+            if (i.justification !== placedJustification) {
+                // shift offscreen
+                bucket.text.placedSymbolArray.get(i.index).shiftX = -Infinity;
+            }
+        }
     }
 
     commit(prevPlacement: ?Placement, now: number): void {
@@ -377,6 +481,12 @@ export class Placement {
         }
     }
 
+    hidePlacedSymbol(bucket: SymbolBucket, placedSymbolIndex: number, isHidden: boolean) {
+        if (placedSymbolIndex > 0) {
+            bucket.text.placedSymbolArray.get(placedSymbolIndex).hidden = isHidden;
+        }
+    }
+
     updateBucketOpacities(bucket: SymbolBucket, seenCrossTileIDs: { [string | number]: boolean }, collisionBoxArray: ?CollisionBoxArray) {
         if (bucket.hasTextData()) bucket.text.opacityVertexArray.clear();
         if (bucket.hasIconData()) bucket.icon.opacityVertexArray.clear();
@@ -402,38 +512,56 @@ export class Placement {
 
         for (let s = 0; s < bucket.symbolInstances.length; s++) {
             const symbolInstance = bucket.symbolInstances.get(s);
-            const isDuplicate = seenCrossTileIDs[symbolInstance.crossTileID];
+            const {
+                numCenterJustifiedGlyphVertices,
+                numRightJustifiedGlyphVertices,
+                numLeftJustifiedGlyphVertices,
+                numVerticalGlyphVertices,
+                rightJustifiedTextSymbolIndex,
+                centerJustifiedTextSymbolIndex,
+                leftJustifiedTextSymbolIndex,
+                verticalPlacedTextSymbolIndex,
+                crossTileID
+            } = symbolInstance;
 
-            let opacityState = this.opacities[symbolInstance.crossTileID];
+            const isDuplicate = seenCrossTileIDs[crossTileID];
+
+            let opacityState = this.opacities[crossTileID];
             if (isDuplicate) {
                 opacityState = duplicateOpacityState;
             } else if (!opacityState) {
                 opacityState = defaultOpacityState;
                 // store the state so that future placements use it as a starting point
-                this.opacities[symbolInstance.crossTileID] = opacityState;
+                this.opacities[crossTileID] = opacityState;
             }
 
-            seenCrossTileIDs[symbolInstance.crossTileID] = true;
+            seenCrossTileIDs[crossTileID] = true;
 
-            const hasText = symbolInstance.numGlyphVertices > 0 || symbolInstance.numVerticalGlyphVertices > 0;
+            const hasText = numCenterJustifiedGlyphVertices > 0 ||
+                            numRightJustifiedGlyphVertices > 0 ||
+                            numLeftJustifiedGlyphVertices > 0 ||
+                            numVerticalGlyphVertices > 0;
+
             const hasIcon = symbolInstance.numIconVertices > 0;
 
             if (hasText) {
                 const packedOpacity = packOpacity(opacityState.text);
                 // Vertical text fades in/out on collision the same way as corresponding
                 // horizontal text. Switch between vertical/horizontal should be instantaneous
-                const opacityEntryCount = (symbolInstance.numGlyphVertices + symbolInstance.numVerticalGlyphVertices) / 4;
+                const opacityEntryCount = (numCenterJustifiedGlyphVertices + numRightJustifiedGlyphVertices +
+                                           numLeftJustifiedGlyphVertices + numVerticalGlyphVertices) / 4;
+
                 for (let i = 0; i < opacityEntryCount; i++) {
                     bucket.text.opacityVertexArray.emplaceBack(packedOpacity);
                 }
                 // If this label is completely faded, mark it so that we don't have to calculate
                 // its position at render time
-                bucket.text.placedSymbolArray.get(symbolInstance.horizontalPlacedTextSymbolIndex).hidden =
-                    (opacityState.text.isHidden(): any);
-
-                if (symbolInstance.verticalPlacedTextSymbolIndex >= 0) {
-                    bucket.text.placedSymbolArray.get(symbolInstance.verticalPlacedTextSymbolIndex).hidden =
-                        (opacityState.text.isHidden(): any);
+                const hide = opacityState.text.isHidden();
+                if (hide) {
+                    this.hidePlacedSymbol(bucket, rightJustifiedTextSymbolIndex, hide);
+                    this.hidePlacedSymbol(bucket, centerJustifiedTextSymbolIndex, hide);
+                    this.hidePlacedSymbol(bucket, leftJustifiedTextSymbolIndex, hide);
+                    this.hidePlacedSymbol(bucket, verticalPlacedTextSymbolIndex, hide);
                 }
             }
 

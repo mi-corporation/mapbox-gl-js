@@ -18,7 +18,7 @@ import type {
 } from '../data/array_types';
 import { WritingMode } from '../symbol/shaping';
 
-export { updateLineLabels, getLabelPlaneMatrix, getGlCoordMatrix, project, placeFirstAndLastGlyph, xyTransformMat4 };
+export { updateLineLabels, hideGlyphs, getLabelPlaneMatrix, getGlCoordMatrix, project, placeFirstAndLastGlyph, xyTransformMat4 };
 
 /*
  * # Overview of coordinate spaces

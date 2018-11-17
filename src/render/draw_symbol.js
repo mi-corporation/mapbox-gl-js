@@ -1,7 +1,7 @@
 // @flow
 
+import Point from '@mapbox/point-geometry';
 import drawCollisionDebug from './draw_collision_debug';
-
 import pixelsToTileUnits from '../source/pixels_to_tile_units';
 import * as symbolProjection from '../symbol/projection';
 import * as symbolSize from '../symbol/symbol_size';
@@ -12,6 +12,8 @@ const symbolLayoutProperties = properties.layout;
 import StencilMode from '../gl/stencil_mode';
 import DepthMode from '../gl/depth_mode';
 import CullFaceMode from '../gl/cull_face_mode';
+import {addDynamicAttributes} from '../data/bucket/symbol_bucket';
+
 import {
     symbolIconUniformValues,
     symbolSDFUniformValues
@@ -118,6 +120,19 @@ function drawLayerSymbols(painter, sourceCache, layer, coords, isText, translate
 
         if (alongLine) {
             symbolProjection.updateLineLabels(bucket, coord.posMatrix, painter, isText, labelPlaneMatrix, glCoordMatrix, pitchWithMap, keepUpright);
+        } else if (isText && layer.layout.get('dynamic-text-anchor')) {
+            const placedSymbols = bucket.text.placedSymbolArray;
+
+            const dynamicLayoutVertexArray = bucket.text.dynamicLayoutVertexArray;
+            dynamicLayoutVertexArray.clear();
+            for (let s = 0; s < placedSymbols.length; s++) {
+                const symbol: any = placedSymbols.get(s);
+                const anchor = new Point(symbol.anchorX + symbol.shiftX, symbol.anchorY + symbol.shiftY);
+                for (let g = 0; g < symbol.numGlyphs; g++) {
+                    addDynamicAttributes(dynamicLayoutVertexArray, anchor, 0);
+                }
+            }
+            bucket.text.dynamicLayoutVertexBuffer.updateData(dynamicLayoutVertexArray);
         }
 
         const matrix = painter.translatePosMatrix(coord.posMatrix, tile, translate, translateAnchor),

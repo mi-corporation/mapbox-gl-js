@@ -1,0 +1,33 @@
+{
+  "expression": [
+    "number-format",
+    123456.789,
+    {
+        "locale": ["get", "locale"],
+        "style": "currency",
+        "currency": ["get", "currency"]
+    }
+  ],
+  "inputs": [
+    [{}, {"properties": {"locale": "ja-JP", "currency": "JPY"}}],
+    [{}, {"properties": {"locale": "de-DE", "currency": "EUR"}}]
+  ],
+  "expected": {
+    "compiled": {
+      "result": "success",
+      "isFeatureConstant": false,
+      "isZoomConstant": true,
+      "type": "string"
+    },
+    "outputs": ["JP¥ 123,457", "€ 123,456.79"],
+    "serialized": [
+      "number-format",
+      123456.789,
+      {
+          "locale": ["string", ["get", "locale"]],
+          "style": "currency",
+          "currency": ["string", ["get", "currency"]]
+      }
+    ]
+  }
+}

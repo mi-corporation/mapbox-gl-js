@@ -1766,19 +1766,39 @@
     },
     "dynamic-text-anchor": {
       "type": "array",
-      "value": "string",
-      "values": [
-        "center",
-        "top",
-        "bottom",
-        "left",
-        "right",
-        "top-left",
-        "top-right",
-        "bottom-left",
-        "bottom-right",
-        "auto"
-      ],
+      "value": "enum",
+      "values": {
+        "auto": {
+          "doc": "If `auto` is the first element in the `dynamic-text-anchor` array, the placement will be attempted in the following order: center, top, bottom, left, right, top-left, top-right, bottom-left, bottom-right."
+        },
+        "center": {
+          "doc": "The center of the text is placed closest to the anchor."
+        },
+        "left": {
+          "doc": "The left side of the text is placed closest to the anchor."
+        },
+        "right": {
+          "doc": "The right side of the text is placed closest to the anchor."
+        },
+        "top": {
+          "doc": "The top of the text is placed closest to the anchor."
+        },
+        "bottom": {
+          "doc": "The bottom of the text is placed closest to the anchor."
+        },
+        "top-left": {
+          "doc": "The top left corner of the text is placed closest to the anchor."
+        },
+        "top-right": {
+          "doc": "The top right corner of the text is placed closest to the anchor."
+        },
+        "bottom-left": {
+          "doc": "The bottom left corner of the text is placed closest to the anchor."
+        },
+        "bottom-right": {
+          "doc": "The bottom right corner of the text is placed closest to the anchor."
+        }
+      },
       "requires": [
         {
           "!": "text-anchor"

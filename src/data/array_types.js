@@ -393,32 +393,38 @@ register('StructArrayLayout2i2i2i12', StructArrayLayout2i2i2i12);
 /**
  * Implementation of the StructArray layout:
  * [0]: Uint8[2]
+ * [4]: Float32[2]
  *
  * @private
  */
-class StructArrayLayout2ub4 extends StructArray {
+class StructArrayLayout2ub2f12 extends StructArray {
     uint8: Uint8Array;
+    float32: Float32Array;
 
     _refreshViews() {
         this.uint8 = new Uint8Array(this.arrayBuffer);
+        this.float32 = new Float32Array(this.arrayBuffer);
     }
 
-    emplaceBack(v0: number, v1: number) {
+    emplaceBack(v0: number, v1: number, v2: number, v3: number) {
         const i = this.length;
         this.resize(i + 1);
-        return this.emplace(i, v0, v1);
+        return this.emplace(i, v0, v1, v2, v3);
     }
 
-    emplace(i: number, v0: number, v1: number) {
-        const o1 = i * 4;
+    emplace(i: number, v0: number, v1: number, v2: number, v3: number) {
+        const o1 = i * 12;
+        const o4 = i * 3;
         this.uint8[o1 + 0] = v0;
         this.uint8[o1 + 1] = v1;
+        this.float32[o4 + 1] = v2;
+        this.float32[o4 + 2] = v3;
         return i;
     }
 }
 
-StructArrayLayout2ub4.prototype.bytesPerElement = 4;
-register('StructArrayLayout2ub4', StructArrayLayout2ub4);
+StructArrayLayout2ub2f12.prototype.bytesPerElement = 12;
+register('StructArrayLayout2ub2f12', StructArrayLayout2ub2f12);
 
 
 /**
@@ -972,7 +978,7 @@ class SymbolInstanceStruct extends Struct {
     crossTileID: number;
     lineCount: number;
     maxLineLength: number;
-    textBoxScale: number;
+    layoutTextSize: number;
     get anchorX() { return this._structArray.int16[this._pos2 + 0]; }
     set anchorX(x) { this._structArray.int16[this._pos2 + 0] = x; }
     get anchorY() { return this._structArray.int16[this._pos2 + 1]; }
@@ -1013,8 +1019,8 @@ class SymbolInstanceStruct extends Struct {
     set lineCount(x) { this._structArray.uint8[this._pos1 + 40] = x; }
     get maxLineLength() { return this._structArray.float32[this._pos4 + 11]; }
     set maxLineLength(x) { this._structArray.float32[this._pos4 + 11] = x; }
-    get textBoxScale() { return this._structArray.float32[this._pos4 + 12]; }
-    set textBoxScale(x) { this._structArray.float32[this._pos4 + 12] = x; }
+    get layoutTextSize() { return this._structArray.float32[this._pos4 + 12]; }
+    set layoutTextSize(x) { this._structArray.float32[this._pos4 + 12] = x; }
 }
 
 SymbolInstanceStruct.prototype.size = 52;
@@ -1150,7 +1156,7 @@ export {
     StructArrayLayout1ul4,
     StructArrayLayout6i1ul2ui2i24,
     StructArrayLayout2i2i2i12,
-    StructArrayLayout2ub4,
+    StructArrayLayout2ub2f12,
     StructArrayLayout2i2ui3ul3ui2f2ub2f48,
     StructArrayLayout6i11ui1ul1ub2f52,
     StructArrayLayout1f4,
@@ -1174,7 +1180,7 @@ export {
     StructArrayLayout1ul4 as SymbolOpacityArray,
     StructArrayLayout2i2i2i12 as CollisionBoxLayoutArray,
     StructArrayLayout2i2i2i12 as CollisionCircleLayoutArray,
-    StructArrayLayout2ub4 as CollisionVertexArray,
+    StructArrayLayout2ub2f12 as CollisionVertexArray,
     StructArrayLayout3ui6 as TriangleIndexArray,
     StructArrayLayout2ui4 as LineIndexArray,
     StructArrayLayout1ui2 as LineStripIndexArray

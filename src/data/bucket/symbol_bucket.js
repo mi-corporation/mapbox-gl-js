@@ -533,7 +533,11 @@ class SymbolBucket implements Bucket {
             lineStartIndex, lineLength, (labelAnchor.segment: any),
             sizeVertex ? sizeVertex[0] : 0, sizeVertex ? sizeVertex[1] : 0,
             lineOffset[0], lineOffset[1],
-            writingMode, (false: any), 0, 0);
+            writingMode, (false: any),
+            // The shiftX and shiftY values are only used for layers that have `dynamic-text-anchor` enabled.
+            // Initially all labels are shifted offscreen and only when placed does the symbol get valid
+            // shift values to appropriately place the label based on the chosen text-anchor.
+            -Infinity, -Infinity);
 
         arrays.programConfigurations.populatePaintArrays(arrays.layoutVertexArray.length, feature, feature.index, {});
     }

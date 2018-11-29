@@ -42,7 +42,7 @@ export type Shaping = {
 };
 
 export type SymbolAnchor = 'center' | 'left' | 'right' | 'top' | 'bottom' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
-type TextJustify = 'left' | 'center' | 'right';
+export type TextJustify = 'left' | 'center' | 'right';
 
 class TaggedString {
     text: string;

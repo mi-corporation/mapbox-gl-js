@@ -120,14 +120,20 @@ function drawLayerSymbols(painter, sourceCache, layer, coords, isText, translate
 
         if (alongLine) {
             symbolProjection.updateLineLabels(bucket, coord.posMatrix, painter, isText, labelPlaneMatrix, glCoordMatrix, pitchWithMap, keepUpright);
-        } else if (isText && layer.layout.get('dynamic-text-anchor')) {
+        } else if (isText && size && layer.layout.get('dynamic-text-anchor')) {
             const placedSymbols = bucket.text.placedSymbolArray;
-
             const dynamicLayoutVertexArray = bucket.text.dynamicLayoutVertexArray;
             dynamicLayoutVertexArray.clear();
             for (let s = 0; s < placedSymbols.length; s++) {
                 const symbol: any = placedSymbols.get(s);
-                const anchor = new Point(symbol.anchorX + symbol.shiftX, symbol.anchorY + symbol.shiftY);
+                const renderSize = symbolSize.evaluateSizeForFeature(bucket.textSizeData, size, symbol);
+                // 24 is the magic number used to scale all sdfs – here we are basically calculating the textBoxScale for the
+                // label at the rendered size instead of the layout size we use for placement
+                const renderTimeTextScale = renderSize * bucket.tilePixelRatio / 24;
+                // scale dynamic anchor offsets by the appropriate glyph size and the current fractional zoom level
+                const shiftX = (symbol.shiftX * renderTimeTextScale) / Math.pow(2, painter.transform.zoom - tile.tileID.overscaledZ);
+                const shiftY = (symbol.shiftY * renderTimeTextScale) / Math.pow(2, painter.transform.zoom - tile.tileID.overscaledZ);
+                const anchor = new Point(symbol.anchorX + shiftX, symbol.anchorY + shiftY);
                 for (let g = 0; g < symbol.numGlyphs; g++) {
                     addDynamicAttributes(dynamicLayoutVertexArray, anchor, 0);
                 }

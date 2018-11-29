@@ -16,8 +16,9 @@ export const placementOpacityAttributes = createLayout([
 ], 4);
 
 export const collisionVertexAttributes = createLayout([
-    { name: 'a_placed', components: 2, type: 'Uint8' }
-], 4);
+    { name: 'a_placed', components: 2, type: 'Uint8' },
+    { name: 'a_shift', components: 2, type: 'Float32'}
+]);
 
 export const collisionBox = createLayout([
     // the box is centered around the anchor point
@@ -97,7 +98,7 @@ export const symbolInstance = createLayout([
     // used for computing dynamic text placement offsets for the different anchors at placement time
     { type: 'Uint8', name: 'lineCount'},
     { type: 'Float32', name: 'maxLineLength'},
-    { type: 'Float32', name: 'textBoxScale'}
+    { type: 'Float32', name: 'layoutTextSize'}
 ]);
 
 export const glyphOffset = createLayout([

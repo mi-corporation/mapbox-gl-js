@@ -46,5 +46,7 @@
   "bottom": 12,
   "left": -38.5,
   "right": 38.5,
-  "writingMode": 1
+  "writingMode": 1,
+  "lineCount": 1,
+  "maxLineLength": 77
 }

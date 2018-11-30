@@ -126,16 +126,22 @@ function drawLayerSymbols(painter, sourceCache, layer, coords, isText, translate
             dynamicLayoutVertexArray.clear();
             for (let s = 0; s < placedSymbols.length; s++) {
                 const symbol: any = placedSymbols.get(s);
-                const renderSize = symbolSize.evaluateSizeForFeature(bucket.textSizeData, size, symbol);
-                // 24 is the magic number used to scale all sdfs – here we are basically calculating the textBoxScale for the
-                // label at the rendered size instead of the layout size we use for placement
-                const renderTimeTextScale = renderSize * bucket.tilePixelRatio / 24;
-                // scale dynamic anchor offsets by the appropriate glyph size and the current fractional zoom level
-                const shiftX = (symbol.shiftX * renderTimeTextScale) / Math.pow(2, painter.transform.zoom - tile.tileID.overscaledZ);
-                const shiftY = (symbol.shiftY * renderTimeTextScale) / Math.pow(2, painter.transform.zoom - tile.tileID.overscaledZ);
-                const anchor = new Point(symbol.anchorX + shiftX, symbol.anchorY + shiftY);
-                for (let g = 0; g < symbol.numGlyphs; g++) {
-                    addDynamicAttributes(dynamicLayoutVertexArray, anchor, 0);
+                if (symbol.hidden || symbol.shiftX === -Infinity) {
+                    // These symbols are from a justification that is not being used, or a label that wasn't placed
+                    // so we don't need to do the extra math to figure out what incremental shift to apply.
+                    symbolProjection.hideGlyphs(symbol.numGlyphs, dynamicLayoutVertexArray);
+                } else  {
+                    const renderSize = symbolSize.evaluateSizeForFeature(bucket.textSizeData, size, symbol);
+                    // 24 is the magic number used to scale all sdfs – here we are basically calculating the textBoxScale for the
+                    // label at the rendered size instead of the layout size we use for placement
+                    const renderTimeTextScale = renderSize * bucket.tilePixelRatio / 24;
+                    // scale dynamic anchor offsets by the appropriate glyph size and the current fractional zoom level
+                    const shiftX = (symbol.shiftX * renderTimeTextScale) / Math.pow(2, painter.transform.zoom - tile.tileID.overscaledZ);
+                    const shiftY = (symbol.shiftY * renderTimeTextScale) / Math.pow(2, painter.transform.zoom - tile.tileID.overscaledZ);
+                    const anchor = new Point(symbol.anchorX + shiftX, symbol.anchorY + shiftY);
+                    for (let g = 0; g < symbol.numGlyphs; g++) {
+                        addDynamicAttributes(dynamicLayoutVertexArray, anchor, 0);
+                    }
                 }
             }
             bucket.text.dynamicLayoutVertexBuffer.updateData(dynamicLayoutVertexArray);

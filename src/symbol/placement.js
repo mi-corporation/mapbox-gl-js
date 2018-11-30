@@ -12,7 +12,7 @@ import { getAnchorAlignment } from './shaping';
 import symbolLayerProperties from '../style/style_layer/symbol_style_layer_properties';
 import assert from 'assert';
 import pixelsToTileUnits from '../source/pixels_to_tile_units';
-
+import {warnOnce} from '../util/util';
 import type Transform from '../geo/transform';
 import type StyleLayer from '../style/style_layer';
 
@@ -101,7 +101,7 @@ export class RetainedQueryData {
 }
 
 
-const DEFAULT_DYNAMIC_PLACEMENT = [
+export const AUTO_DYNAMIC_PLACEMENT = [
     "center",
     "top",
     "bottom",
@@ -112,7 +112,6 @@ const DEFAULT_DYNAMIC_PLACEMENT = [
     "bottom-left",
     "bottom-right"
 ];
-
 
 class CollisionGroups {
     collisionGroups: { [groupName: string]: { ID: number, predicate?: any }};
@@ -151,7 +150,7 @@ type DynamicTextOffsets = {
     right: [number, number],
     center: [number, number],
     left: [number, number]
-}
+};
 
 export class Placement {
     transform: Transform;
@@ -303,10 +302,15 @@ export class Placement {
                 } else if (collisionArrays.textBox) {
                     const textBoxScale = getTextboxScale(bucket.tilePixelRatio, layoutTextSize);
                     const dynamicAnchors = layout.get('dynamic-text-anchor');
-                    const anchors = dynamicAnchors[0] === "auto" ? DEFAULT_DYNAMIC_PLACEMENT : dynamicAnchors;
+                    const anchors = dynamicAnchors[0] === "auto" ? AUTO_DYNAMIC_PLACEMENT : dynamicAnchors;
                     for (const anchor of anchors) {
                         // Skip center placement on auto mode if there is an icon for this feature
                         if (collisionArrays.iconBox && dynamicAnchors[0] === "auto" && anchor === "center") continue;
+                        // Auto is not valid as any but the first element of the `dynamic-placmene`
+                        if (anchor === "auto") {
+                            warnOnce("Auto is not valid as any but the first element of the `dynamic-text-anchor` array.");
+                            continue;
+                        }
                         const justification = getAnchorJustification(anchor);
                         const justifiedPlacedSymbol = justifications[justification];
                         if (justifiedPlacedSymbol < 0) continue;
@@ -589,7 +593,6 @@ export class Placement {
                 this.shiftPlacedSymbols(bucket, centerJustifiedTextSymbolIndex, hide, dynamicPlacement ? dynamicOffsets.center : undefined);
                 this.shiftPlacedSymbols(bucket, leftJustifiedTextSymbolIndex, hide, dynamicPlacement ? dynamicOffsets.left : undefined);
                 this.shiftPlacedSymbols(bucket, verticalPlacedTextSymbolIndex, hide);
-
             }
 
             if (hasIcon) {

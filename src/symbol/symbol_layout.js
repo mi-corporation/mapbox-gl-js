@@ -19,8 +19,9 @@ import SymbolBucket from '../data/bucket/symbol_bucket';
 import EvaluationParameters from '../style/evaluation_parameters';
 import {SIZE_PACK_FACTOR} from './symbol_size';
 import ONE_EM from './one_em';
+import {AUTO_DYNAMIC_PLACEMENT} from './placement';
 
-import type {Shaping, PositionedIcon, TextJustify, SymbolAnchor} from './shaping';
+import type {Shaping, PositionedIcon, TextJustify} from './shaping';
 import type {CollisionBoxArray} from '../data/array_types';
 import type {SymbolFeature} from '../data/bucket/symbol_bucket';
 import type {StyleImage} from '../style/style_image';
@@ -54,6 +55,8 @@ type Sizes = {
     compositeTextSizes: [PossiblyEvaluatedPropertyValue<number>, PossiblyEvaluatedPropertyValue<number>], // (5)
     compositeIconSizes: [PossiblyEvaluatedPropertyValue<number>, PossiblyEvaluatedPropertyValue<number>], // (5)
 };
+
+export type DynamicTextAnchor = 'auto' | 'center' | 'left' | 'right' | 'top' | 'bottom' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
 export function performSymbolLayout(bucket: SymbolBucket,
                              glyphMap: {[string]: {[number]: ?StyleGlyph}},
@@ -111,28 +114,38 @@ export function performSymbolLayout(bucket: SymbolBucket,
             const spacing = layout.get('text-letter-spacing').evaluate(feature, {}) * ONE_EM;
             const spacingIfAllowed = allowsLetterSpacing(unformattedText) ? spacing : 0;
             const symbolPlacement = layout.get('symbol-placement');
-            const textAnchorProperty = layout.get('text-anchor').evaluate(feature, {});
+            const textAnchor = layout.get('text-anchor').evaluate(feature, {});
             // Dynamic placement doesn't apply to line-placed labels
-            const textAnchor = !textAlongLine && layout.get('dynamic-text-anchor')  || [textAnchorProperty];
-            const textJustify =  textAnchor.length > 1 ? textAnchor.map(a => getAnchorJustification(a)) : [layout.get('text-justify').evaluate(feature, {})];
+            let dynamicTextAnchor = layout.get('dynamic-text-anchor');
+            if (dynamicTextAnchor && dynamicTextAnchor[0] === "auto") {
+                dynamicTextAnchor = AUTO_DYNAMIC_PLACEMENT;
+            }
+            const textJustify = layout.get('text-justify').evaluate(feature, {});
+            const justifications =  dynamicTextAnchor ? dynamicTextAnchor.map(a => getAnchorJustification(a)) : [];
 
             const maxWidth =  symbolPlacement === 'point' ?
                 layout.get('text-max-width').evaluate(feature, {}) * ONE_EM :
                 0;
 
-            for (let i = 0; i < textJustify.length; i++) {
-                const justification: TextJustify = textJustify[i];
-                if (shapedTextOrientations.horizontal[justification]) continue;
-                // If using dynamic-text-anchor for the layer, we use a top-left anchor for all shapings and apply
-                // the offsets for the anchor and icon image in the placement step.
-                const anchor = textAnchor.length > 1 ? "top-left" : textAnchor[i];
-                const shaping = shapeText(text, glyphMap, fontstack, maxWidth, lineHeight, anchor, justification, spacingIfAllowed, textOffset, ONE_EM, WritingMode.horizontal);
-                if (shaping) shapedTextOrientations.horizontal[justification] = shaping;
+            // If this layer uses dynamic-text-anchor, generate shapings for all justification possibilities.
+            if (!textAlongLine && dynamicTextAnchor) {
+                for (let i = 0; i < justifications.length; i++) {
+                    const justification: TextJustify = justifications[i];
+                    if (shapedTextOrientations.horizontal[justification]) continue;
+                    // If using dynamic-text-anchor for the layer, we use a top-left anchor for all shapings and apply
+                    // the offsets for the anchor in the placement step.
+                    const shaping = shapeText(text, glyphMap, fontstack, maxWidth, lineHeight, 'top-left', justification, spacingIfAllowed, textOffset, ONE_EM, WritingMode.horizontal);
+                    if (shaping) shapedTextOrientations.horizontal[justification] = shaping;
+                }
+            } else {
+                const shaping = shapeText(text, glyphMap, fontstack, maxWidth, lineHeight, textAnchor, textJustify, spacingIfAllowed, textOffset, ONE_EM, WritingMode.horizontal);
+                if (shaping) shapedTextOrientations.horizontal[textJustify] = shaping;
+
+                if (allowsVerticalWritingMode(unformattedText) && textAlongLine && keepUpright) {
+                    shapedTextOrientations.vertical = shapeText(text, glyphMap, fontstack, maxWidth, lineHeight, textAnchor, textJustify, spacingIfAllowed, textOffset, ONE_EM, WritingMode.vertical);
+                }
             }
 
-            if (allowsVerticalWritingMode(unformattedText) && textAlongLine && keepUpright) {
-                shapedTextOrientations.vertical = shapeText(text, glyphMap, fontstack, maxWidth, lineHeight, textAnchor[0], textJustify[0], spacingIfAllowed, textOffset, ONE_EM, WritingMode.vertical);
-            }
         }
 
         let shapedIcon;
@@ -173,7 +186,7 @@ export function getTextboxScale(tilePixelRatio: number, layoutTextSize: number) 
 }
 
 // for dynamic placement, we choose the appropriate justification based on the current anchor
-export function getAnchorJustification(anchor: SymbolAnchor): TextJustify  {
+export function getAnchorJustification(anchor: DynamicTextAnchor): TextJustify  {
     // top and bottom anchors will be replaced by an empty string, but both of those
     // anchors are center justified.
     switch (anchor) {

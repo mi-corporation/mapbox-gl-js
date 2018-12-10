@@ -257,7 +257,7 @@ function addFeature(bucket: SymbolBucket,
             bucket.collisionBoxArray, feature.index, feature.sourceLayerIndex, bucket.index,
             textBoxScale, textPadding, textAlongLine, textOffset,
             iconBoxScale, iconPadding, iconAlongLine, iconOffset,
-            feature, glyphPositionMap, sizes, layoutTextSize);
+            feature, glyphPositionMap, sizes, layoutTextSize, layoutIconSize);
     };
 
     if (symbolPlacement === 'line') {
@@ -401,7 +401,8 @@ function addSymbol(bucket: SymbolBucket,
                    feature: SymbolFeature,
                    glyphPositionMap: {[string]: {[number]: GlyphPosition}},
                    sizes: Sizes,
-                   layoutTextSize: number) {
+                   layoutTextSize: number,
+                   layoutIconSize: number) {
     const lineArray = bucket.addToLineVertexArray(anchor, line);
 
     let textCollisionFeature, iconCollisionFeature;
@@ -509,7 +510,8 @@ function addSymbol(bucket: SymbolBucket,
         0,
         lineCount,
         maxLineLength,
-        layoutTextSize);
+        layoutTextSize,
+        layoutIconSize);
 }
 
 function anchorIsTooClose(bucket: any, text: string, repeatDistance: number, anchor: Point) {

@@ -73,7 +73,10 @@ export const placement = createLayout([
     { type: 'Uint8', name: 'writingMode' },
     { type: 'Uint8', name: 'hidden' },
     { type: 'Float32', name: 'shiftX'},
-    { type: 'Float32', name: 'shiftY'}
+    { type: 'Float32', name: 'shiftY'},
+    { type: 'Float32', name: 'iconShiftX'},
+    { type: 'Float32', name: 'iconShiftY'}
+
 ]);
 
 export const symbolInstance = createLayout([
@@ -98,7 +101,8 @@ export const symbolInstance = createLayout([
     // used for computing dynamic text placement offsets for the different anchors at placement time
     { type: 'Uint8', name: 'lineCount'},
     { type: 'Float32', name: 'maxLineLength'},
-    { type: 'Float32', name: 'layoutTextSize'}
+    { type: 'Float32', name: 'layoutTextSize'},
+    { type: 'Float32', name: 'layoutIconSize'}
 ]);
 
 export const glyphOffset = createLayout([

@@ -73,10 +73,7 @@ export const placement = createLayout([
     { type: 'Uint8', name: 'writingMode' },
     { type: 'Uint8', name: 'hidden' },
     { type: 'Float32', name: 'shiftX'},
-    { type: 'Float32', name: 'shiftY'},
-    { type: 'Float32', name: 'iconShiftX'},
-    { type: 'Float32', name: 'iconShiftY'}
-
+    { type: 'Float32', name: 'shiftY'}
 ]);
 
 export const symbolInstance = createLayout([
@@ -102,7 +99,7 @@ export const symbolInstance = createLayout([
     { type: 'Uint8', name: 'lineCount'},
     { type: 'Float32', name: 'maxLineLength'},
     { type: 'Float32', name: 'layoutTextSize'},
-    { type: 'Float32', name: 'layoutIconSize'}
+    { type: 'Float32', name: 'dynamicTextOffset'}
 ]);
 
 export const glyphOffset = createLayout([

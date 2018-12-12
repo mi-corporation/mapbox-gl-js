@@ -110,7 +110,6 @@ export function performSymbolLayout(bucket: SymbolBucket,
         const text = feature.text;
         if (text) {
             const unformattedText = text.toString();
-            const textOffset: [number, number] = (layout.get('text-offset').evaluate(feature, {}).map((t) => t * ONE_EM): any);
             const spacing = layout.get('text-letter-spacing').evaluate(feature, {}) * ONE_EM;
             const spacingIfAllowed = allowsLetterSpacing(unformattedText) ? spacing : 0;
             const symbolPlacement = layout.get('symbol-placement');
@@ -120,6 +119,9 @@ export function performSymbolLayout(bucket: SymbolBucket,
             if (dynamicTextAnchor && dynamicTextAnchor[0] === "auto") {
                 dynamicTextAnchor = AUTO_DYNAMIC_PLACEMENT;
             }
+            // Dynamically placed layers use the `dynamic-text-offset` property and the [x, y] offset vector
+            // is calculated at placement time based on the placed `text-anchor`.
+            const textOffset: [number, number] = ((dynamicTextAnchor ? [0, 0] : layout.get('text-offset').evaluate(feature, {})).map((t) => t * ONE_EM): any);
             const textJustify = layout.get('text-justify').evaluate(feature, {});
             const justifications =  dynamicTextAnchor ? dynamicTextAnchor.map(a => getAnchorJustification(a)) : [];
 
@@ -228,7 +230,7 @@ function addFeature(bucket: SymbolBucket,
     }
 
     const layout = bucket.layers[0].layout;
-    const textOffset = layout.get('text-offset').evaluate(feature, {});
+    const textOffset = layout.get('dynamic-text-anchor') ? [0, 0] : layout.get('text-offset').evaluate(feature, {});
     const iconOffset = layout.get('icon-offset').evaluate(feature, {});
     const justifications = Object.keys(shapedTextOrientations.horizontal);
     const defaultHorizontalShaping = justifications.length ? shapedTextOrientations.horizontal[justifications[0]] : null;
@@ -257,7 +259,7 @@ function addFeature(bucket: SymbolBucket,
             bucket.collisionBoxArray, feature.index, feature.sourceLayerIndex, bucket.index,
             textBoxScale, textPadding, textAlongLine, textOffset,
             iconBoxScale, iconPadding, iconAlongLine, iconOffset,
-            feature, glyphPositionMap, sizes, layoutTextSize, layoutIconSize);
+            feature, glyphPositionMap, sizes, layoutTextSize);
     };
 
     if (symbolPlacement === 'line') {
@@ -401,8 +403,7 @@ function addSymbol(bucket: SymbolBucket,
                    feature: SymbolFeature,
                    glyphPositionMap: {[string]: {[number]: GlyphPosition}},
                    sizes: Sizes,
-                   layoutTextSize: number,
-                   layoutIconSize: number) {
+                   layoutTextSize: number) {
     const lineArray = bucket.addToLineVertexArray(anchor, line);
 
     let textCollisionFeature, iconCollisionFeature;
@@ -414,6 +415,7 @@ function addSymbol(bucket: SymbolBucket,
     let lineCount = 0;
     let maxLineLength = 0;
     let key = murmur3('');
+    const dynamicTextOffset = layer.layout.get('dynamic-text-offset').evaluate(feature, {}) * ONE_EM;
 
     for (const justification: any in shapedTextOrientations.horizontal) {
         const shaping = shapedTextOrientations.horizontal[justification];
@@ -511,7 +513,7 @@ function addSymbol(bucket: SymbolBucket,
         lineCount,
         maxLineLength,
         layoutTextSize,
-        layoutIconSize);
+        dynamicTextOffset);
 }
 
 function anchorIsTooClose(bucket: any, text: string, repeatDistance: number, anchor: Point) {

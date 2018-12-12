@@ -69,13 +69,13 @@ class JointPlacement {
 function shiftDynamicCollisionBox(collisionBox: SingleCollisionBox,
                                   textBoxScale: number,
                                   shiftX: number, shiftY: number,
-                                  iconShiftX: number, iconShiftY: number) {
+                                  offset: [number, number]) {
     const {x1, x2, y1, y2, anchorPointX, anchorPointY} = collisionBox;
     return {
-        x1: x1 + (shiftX * textBoxScale) + iconShiftX,
-        y1: y1 + (shiftY * textBoxScale) + iconShiftY,
-        x2: x2 + (shiftX * textBoxScale) + iconShiftX,
-        y2: y2 + (shiftY * textBoxScale) + iconShiftY,
+        x1: x1 + (shiftX + offset[0]) * textBoxScale,
+        y1: y1 + (shiftY + offset[1]) * textBoxScale,
+        x2: x2 + (shiftX + offset[0]) * textBoxScale,
+        y2: y2 + (shiftY + offset[1]) * textBoxScale,
         // symbol anchor point stays the same regardless of text-anchor
         anchorPointX,
         anchorPointY
@@ -149,10 +149,51 @@ class CollisionGroups {
 
 type DynamicTextOffsets = {
     // [shiftX, shiftY]
-    right: [number, number, number, number],
-    center: [number, number, number, number],
-    left: [number, number, number, number]
+    right: [number, number],
+    center: [number, number],
+    left: [number, number]
 };
+
+function getDynamicOffset(anchor, radialOffset) {
+    let x = 0, y = 0;
+    const hypotenuse = Math.sqrt(2 * Math.pow(radialOffset, 2));
+
+    switch (anchor) {
+    case 'top-right':
+    case 'top-left':
+        y = hypotenuse;
+        break;
+    case 'bottom-right':
+    case 'bottom-left':
+        y = -hypotenuse;
+        break;
+    case 'bottom':
+        y = -radialOffset;
+        break;
+    case 'top':
+        y = radialOffset;
+        break;
+    }
+
+    switch (anchor) {
+    case 'top-right':
+    case 'bottom-right':
+        x = -hypotenuse;
+        break;
+    case 'top-left':
+    case 'bottom-left':
+        x = hypotenuse;
+        break;
+    case 'left':
+        x = radialOffset;
+        break;
+    case 'right':
+        x = -radialOffset;
+        break;
+    }
+
+    return [x, y];
+}
 
 export class Placement {
     transform: Transform;
@@ -288,7 +329,7 @@ export class Placement {
                     maxLineLength,
                     lineCount,
                     layoutTextSize,
-                    layoutIconSize
+                    dynamicTextOffset
                 } = symbolInstance;
                 // justify right = 1, left = 0, center = 0.5
                 const justifications = {
@@ -303,7 +344,6 @@ export class Placement {
                     placeText = placedGlyphBoxes.box.length > 0;
                 } else if (collisionArrays.textBox) {
                     const textBoxScale = getTextboxScale(bucket.tilePixelRatio, layoutTextSize);
-                    const iconBoxScale = bucket.tilePixelRatio * layoutIconSize;
                     const dynamicAnchors = layout.get('dynamic-text-anchor');
                     const anchors = dynamicAnchors[0] === "auto" ? AUTO_DYNAMIC_PLACEMENT : dynamicAnchors;
                     for (const anchor of anchors) {
@@ -321,33 +361,17 @@ export class Placement {
                         const {horizontalAlign, verticalAlign} = getAnchorAlignment(anchor);
                         const shiftX = -horizontalAlign * maxLineLength;
                         const shiftY = -verticalAlign * lineCount * lineHeight;
-
-                        let iconShiftX = 0, iconShiftY = 0;
-                        // If the symbol includes an icon, we automatically shift the text additionally by the height and width
-                        // of the icon so the text does not overlap with the icon.
-                        if (collisionArrays.iconBox) {
-                            const iconHeight = collisionArrays.iconBox.y2 - collisionArrays.iconBox.y1;
-                            const iconWidth = collisionArrays.iconBox.x2 - collisionArrays.iconBox.x1;
-                            // TODO this assumes that the icon is placed at `icon-anchor`: "center" – should we enforce this at layout?
-                            // 0.5 is added to each alignment because align shifts are based on top-left placement and center anchor is
-                            // 50% up and 50% left from top-left.
-                            iconShiftX = (0.5 - horizontalAlign) * iconWidth;
-                            iconShiftY = (0.5 - verticalAlign) * iconHeight;
-                        }
+                        const offset = dynamicTextOffset ? getDynamicOffset(anchor, dynamicTextOffset) : [0, 0];
 
                         if (collisionArrays.textBox) {
-                            shiftedCollisionBox = shiftDynamicCollisionBox(collisionArrays.textBox, textBoxScale, shiftX, shiftY, iconShiftX, iconShiftY);
+                            shiftedCollisionBox = shiftDynamicCollisionBox(collisionArrays.textBox, textBoxScale, shiftX, shiftY, offset);
                             placedGlyphBoxes = this.collisionIndex.placeCollisionBox(shiftedCollisionBox,
                                     layout.get('text-allow-overlap'), textPixelRatio, posMatrix, collisionGroup.predicate);
                             placeText = placedGlyphBoxes.box.length > 0;
 
                             if (placeText) {
-                                bucket.text.placedSymbolArray.get(justifiedPlacedSymbol).shiftX = shiftX;
-                                bucket.text.placedSymbolArray.get(justifiedPlacedSymbol).shiftY = shiftY;
-                                if (iconShiftX || iconShiftY ){
-                                    bucket.text.placedSymbolArray.get(justifiedPlacedSymbol).iconShiftX = iconShiftX / iconBoxScale;
-                                    bucket.text.placedSymbolArray.get(justifiedPlacedSymbol).iconShiftY = iconShiftY / iconBoxScale;
-                                }
+                                bucket.text.placedSymbolArray.get(justifiedPlacedSymbol).shiftX = shiftX + offset[0];
+                                bucket.text.placedSymbolArray.get(justifiedPlacedSymbol).shiftY = shiftY + offset[1];
                                 this.hideUnplacedJustifications(bucket, justification, symbolInstance);
                                 break;
                             }
@@ -508,14 +532,12 @@ export class Placement {
         }
     }
 
-    shiftPlacedSymbols(bucket: SymbolBucket, placedSymbolIndex: number, isHidden: boolean, dynamicOffset: ?[number, number, number, number]) {
+    shiftPlacedSymbols(bucket: SymbolBucket, placedSymbolIndex: number, isHidden: boolean, dynamicOffset: ?[number, number]) {
         if (placedSymbolIndex > -1) {
             bucket.text.placedSymbolArray.get(placedSymbolIndex).hidden = isHidden ? 1 : 0;
             if (!isHidden && dynamicOffset) {
                 bucket.text.placedSymbolArray.get(placedSymbolIndex).shiftX = dynamicOffset[0];
                 bucket.text.placedSymbolArray.get(placedSymbolIndex).shiftY = dynamicOffset[1];
-                bucket.text.placedSymbolArray.get(placedSymbolIndex).iconShiftX = dynamicOffset[2];
-                bucket.text.placedSymbolArray.get(placedSymbolIndex).iconShiftY = dynamicOffset[3];
             }
         }
     }
@@ -529,9 +551,9 @@ export class Placement {
         const layout = bucket.layers[0].layout;
         const duplicateOpacityState = new JointOpacityState(null, 0, false, false, true);
         const duplicateDynamicShifts = {
-            right: [-Infinity, -Infinity, 0, 0],
-            center: [-Infinity, -Infinity, 0, 0],
-            left: [-Infinity, -Infinity, 0, 0]
+            right: [-Infinity, -Infinity],
+            center: [-Infinity, -Infinity],
+            left: [-Infinity, -Infinity]
         };
         const textAllowOverlap = layout.get('text-allow-overlap');
         const iconAllowOverlap = layout.get('icon-allow-overlap');
@@ -561,8 +583,7 @@ export class Placement {
                 leftJustifiedTextSymbolIndex,
                 verticalPlacedTextSymbolIndex,
                 crossTileID,
-                layoutTextSize,
-                layoutIconSize
+                layoutTextSize
             } = symbolInstance;
 
             const isDuplicate = seenCrossTileIDs[crossTileID];
@@ -581,9 +602,9 @@ export class Placement {
             if (!dynamicOffsets && dynamicPlacement) {
                 const placedSymbols = [leftJustifiedTextSymbolIndex, centerJustifiedTextSymbolIndex, rightJustifiedTextSymbolIndex].map(i => bucket.text.placedSymbolArray.get(i));
                 dynamicOffsets = {
-                    left: [placedSymbols[0].shiftX, placedSymbols[0].shiftY, placedSymbols[0].iconShiftX, placedSymbols[0].iconShiftY],
-                    center: [placedSymbols[1].shiftX, placedSymbols[1].shiftY, placedSymbols[1].iconShiftX, placedSymbols[1].iconShiftY],
-                    right: [placedSymbols[2].shiftX, placedSymbols[2].shiftY, placedSymbols[2].iconShiftX, placedSymbols[2].iconShiftY]
+                    left: [placedSymbols[0].shiftX, placedSymbols[0].shiftY],
+                    center: [placedSymbols[1].shiftX, placedSymbols[1].shiftY],
+                    right: [placedSymbols[2].shiftX, placedSymbols[2].shiftY]
                 };
                 this.dynamicOffsets[crossTileID] = dynamicOffsets;
             }
@@ -635,12 +656,11 @@ export class Placement {
                         let shiftX = 0, shiftY = 0;
                         if (dynamicPlacement && opacityState.text.placed) {
                             const textBoxScale = getTextboxScale(bucket.tilePixelRatio, layoutTextSize);
-                            const iconBoxScale = bucket.tilePixelRatio * layoutIconSize;
                             const placedShift = Object.keys(dynamicOffsets).map(k => dynamicOffsets[k]).filter(s => s[0] !== undefined && s[0] !== -Infinity);
                             if (placedShift.length) {
                                 const shift = placedShift[0];
-                                shiftX = (shift[0] * textBoxScale + shift[2] * iconBoxScale) / Math.pow(2, this.transform.zoom - overscaledZ);
-                                shiftY = (shift[1] * textBoxScale + shift[3] * iconBoxScale) / Math.pow(2, this.transform.zoom - overscaledZ);
+                                shiftX = (shift[0] * textBoxScale) / Math.pow(2, this.transform.zoom - overscaledZ);
+                                shiftY = (shift[1] * textBoxScale) / Math.pow(2, this.transform.zoom - overscaledZ);
                             }
                         }
 

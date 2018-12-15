@@ -4,7 +4,6 @@
     123456.789,
     {
         "locale": ["get", "locale"],
-        "style": "currency",
         "currency": ["get", "currency"]
     }
   ],
@@ -25,7 +24,6 @@
       123456.789,
       {
           "locale": ["string", ["get", "locale"]],
-          "style": "currency",
           "currency": ["string", ["get", "currency"]]
       }
     ]

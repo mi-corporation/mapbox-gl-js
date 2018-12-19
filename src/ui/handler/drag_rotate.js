@@ -145,10 +145,24 @@ class DragRotateHandler {
         // to prevent map move events from being fired during a drag.
         window.document.addEventListener('mousemove', this._onMouseMove, {capture: true});
         window.document.addEventListener('mouseup', this._onMouseUp);
+        // If our element belongs to a different document, also bind to that document
+        if (this._el.ownerDocument && this._el.ownerDocument !== window.document) {
+            this._el.ownerDocument.addEventListener('mousemove', this._onMouseMove, {capture: true});
+            this._el.ownerDocument.addEventListener('mouseup', this._onMouseUp);
+        }
 
         // Deactivate when the window loses focus. Otherwise if a mouseup occurs when the window
         // isn't in focus, dragging will continue even though the mouse is no longer pressed.
-        window.addEventListener('blur', this._onBlur);
+        if (this._el.ownerDocument && this._el.ownerDocument !== window.document) {
+            // But, if we're binding to an element from a different document, bind to
+            // THAT document's window object, not to our own. That's b/c a blur event fires on our
+            // window if focus is transferred to the iframe containing the other document.
+            if (this._el.ownerDocument.defaultView) {
+                this._el.ownerDocument.defaultView.addEventListener('blur', this._onBlur);
+            }
+        } else {
+            window.addEventListener('blur', this._onBlur);
+        }
 
         this._state = 'pending';
         this._inertia = [[browser.now(), this._map.getBearing()]];
@@ -259,6 +273,13 @@ class DragRotateHandler {
         window.document.removeEventListener('mousemove', this._onMouseMove, {capture: true});
         window.document.removeEventListener('mouseup', this._onMouseUp);
         window.removeEventListener('blur', this._onBlur);
+        if (this._el.ownerDocument && this._el.ownerDocument !== window.document) {
+            this._el.ownerDocument.removeEventListener('mousemove', this._onMouseMove, {capture: true});
+            this._el.ownerDocument.removeEventListener('mouseup', this._onMouseUp);
+            if (this._el.ownerDocument.defaultView) {
+                this._el.ownerDocument.defaultView.removeEventListener('blur', this._onBlur);
+            }
+        }
         DOM.enableDrag();
     }
 

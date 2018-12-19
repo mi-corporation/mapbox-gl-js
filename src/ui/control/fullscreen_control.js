@@ -35,8 +35,9 @@ class FullscreenControl {
     constructor(options: Options) {
         this._fullscreen = false;
         if (options && options.container) {
-            if (options.container instanceof window.HTMLElement) {
-                this._container = options.container;
+            const container = options.container;
+            if (DOM.isHTMLElement(container)) {
+                this._container = container;
             } else {
                 warnOnce('Full screen control \'container\' must be a DOM element.');
             }

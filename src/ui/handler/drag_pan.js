@@ -120,6 +120,11 @@ class DragPanHandler {
         // to prevent map move events from being fired during a drag.
         DOM.addEventListener(window.document, 'mousemove', this._onMove, {capture: true});
         DOM.addEventListener(window.document, 'mouseup', this._onMouseUp);
+        // If our element belongs to a different document, also bind to that document
+        if (this._el.ownerDocument && this._el.ownerDocument !== window.document) {
+            DOM.addEventListener(this._el.ownerDocument, 'mousemove', this._onMove, {capture: true});
+            DOM.addEventListener(this._el.ownerDocument, 'mouseup', this._onMouseUp);
+        }
 
         this._start(e);
     }
@@ -135,6 +140,11 @@ class DragPanHandler {
         // to prevent map move events from being fired during a drag.
         DOM.addEventListener(window.document, 'touchmove', this._onMove, {capture: true, passive: false});
         DOM.addEventListener(window.document, 'touchend', this._onTouchEnd);
+        // If our element belongs to a different document, also bind to that document
+        if (this._el.ownerDocument && this._el.ownerDocument !== window.document) {
+            DOM.addEventListener(this._el.ownerDocument, 'touchmove', this._onMove, {capture: true, passive: false});
+            DOM.addEventListener(this._el.ownerDocument, 'touchend', this._onTouchEnd);
+        }
 
         this._start(e);
     }
@@ -142,7 +152,16 @@ class DragPanHandler {
     _start(e: MouseEvent | TouchEvent) {
         // Deactivate when the window loses focus. Otherwise if a mouseup occurs when the window
         // isn't in focus, dragging will continue even though the mouse is no longer pressed.
-        window.addEventListener('blur', this._onBlur);
+        if (this._el.ownerDocument && this._el.ownerDocument !== window.document) {
+            // But, if we're binding to an element from a different document, bind to
+            // THAT document's window object, not to our own. That's b/c a blur event fires on our
+            // window if focus is transferred to the iframe containing the other document.
+            if (this._el.ownerDocument.defaultView) {
+                this._el.ownerDocument.defaultView.addEventListener('blur', this._onBlur);
+            }
+        } else {
+            window.addEventListener('blur', this._onBlur);
+        }
 
         this._state = 'pending';
         this._startPos = this._mouseDownPos = this._lastPos = DOM.mousePos(this._el, e);
@@ -256,6 +275,15 @@ class DragPanHandler {
         DOM.removeEventListener(window.document, 'mousemove', this._onMove, {capture: true});
         DOM.removeEventListener(window.document, 'mouseup', this._onMouseUp);
         DOM.removeEventListener(window, 'blur', this._onBlur);
+        if (this._el.ownerDocument && this._el.ownerDocument !== window.document) {
+            DOM.removeEventListener(this._el.ownerDocument, 'touchmove', this._onMove, {capture: true, passive: false});
+            DOM.removeEventListener(this._el.ownerDocument, 'touchend', this._onTouchEnd);
+            DOM.removeEventListener(this._el.ownerDocument, 'mousemove', this._onMove, {capture: true});
+            DOM.removeEventListener(this._el.ownerDocument, 'mouseup', this._onMouseUp);
+            if (this._el.ownerDocument.defaultView) {
+                this._el.ownerDocument.defaultView.removeEventListener('blur', this._onBlur);
+            }
+        }
     }
 
     _deactivate() {

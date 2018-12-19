@@ -127,6 +127,11 @@ class TouchZoomRotateHandler {
 
         DOM.addEventListener(window.document, 'touchmove', this._onMove, {passive: false});
         DOM.addEventListener(window.document, 'touchend', this._onEnd);
+        // If our element belongs to a different document, also bind to that document
+        if (this._el.ownerDocument && this._el.ownerDocument !== window.document) {
+            DOM.addEventListener(this._el.ownerDocument, 'touchmove', this._onMove, {passive: false});
+            DOM.addEventListener(this._el.ownerDocument, 'touchend', this._onEnd);
+        }
     }
 
     _getTouchEventData(e: TouchEvent) {
@@ -210,6 +215,10 @@ class TouchZoomRotateHandler {
     _onEnd(e: TouchEvent) {
         DOM.removeEventListener(window.document, 'touchmove', this._onMove, {passive: false});
         DOM.removeEventListener(window.document, 'touchend', this._onEnd);
+        if (this._el.ownerDocument && this._el.ownerDocument !== window.document) {
+            DOM.removeEventListener(this._el.ownerDocument, 'touchmove', this._onMove, {passive: false});
+            DOM.removeEventListener(this._el.ownerDocument, 'touchend', this._onEnd);
+        }
 
         const gestureIntent = this._gestureIntent;
         const startScale = this._startScale;

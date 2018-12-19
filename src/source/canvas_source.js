@@ -2,6 +2,7 @@
 
 import ImageSource from './image_source';
 
+import DOM from '../util/dom';
 import window from '../util/window';
 import rasterBoundsAttributes from '../data/raster_bounds_attributes';
 import SegmentVector from '../data/segment';
@@ -88,7 +89,7 @@ class CanvasSource extends ImageSource {
 
         if (!options.canvas) {
             this.fire(new ErrorEvent(new ValidationError(`sources.${id}`, null, 'missing required property "canvas"')));
-        } else if (typeof options.canvas !== 'string' && !(options.canvas instanceof window.HTMLCanvasElement)) {
+        } else if (typeof options.canvas !== 'string' && !(DOM.isHTMLElement(options.canvas, 'HTMLCanvasElement'))) {
             this.fire(new ErrorEvent(new ValidationError(`sources.${id}`, null, '"canvas" must be either a string representing the ID of the canvas element from which to read, or an HTMLCanvasElement instance')));
         }
 
@@ -112,7 +113,7 @@ class CanvasSource extends ImageSource {
 
     load() {
         if (!this.canvas) {
-            this.canvas = (this.options.canvas instanceof window.HTMLCanvasElement) ?
+            this.canvas = typeof this.options.canvas !== 'string' ?
                 this.options.canvas :
                 window.document.getElementById(this.options.canvas);
         }

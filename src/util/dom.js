@@ -5,6 +5,8 @@ import Point from '@mapbox/point-geometry';
 import window from './window';
 import assert from 'assert';
 
+import type {Window} from '../types/window';
+
 const DOM = {};
 export default DOM;
 
@@ -139,4 +141,31 @@ DOM.remove = function(node: HTMLElement) {
     if (node.parentNode) {
         node.parentNode.removeChild(node);
     }
+};
+
+/**
+ * Test if the given item is an HTMLElement, or optionally a specific element type,
+ * but in a way that respects elements that may belong to a document other than OUR
+ * window's document.
+ *
+ * E.g.
+ *
+ *    DOM.isHTMLElement(container)
+ *
+ * OR
+ *
+ *    DOM.isHTMLElement(container, 'HTMLCanvasElement')
+ */
+// NOTE: It'd be great if we could use this function to also refine the type of el.
+// %checks comes close, but isn't currently sufficient.
+// That's true even if we didn't allow specifying the desired constructor dynamically.
+// See https://github.com/facebook/flow/issues/34
+DOM.isHTMLElement = function(el: any, elementConstructorName?: $Keys<Window>) {
+    elementConstructorName = elementConstructorName || 'HTMLElement';
+    return el instanceof window[elementConstructorName] ||
+        el &&
+        el.ownerDocument &&
+        el.ownerDocument.defaultView &&
+        typeof el.ownerDocument.defaultView[elementConstructorName] === 'function' &&
+        el instanceof el.ownerDocument.defaultView[elementConstructorName];
 };

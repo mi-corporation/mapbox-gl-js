@@ -88,6 +88,12 @@ class BoxZoomHandler {
         window.document.addEventListener('mousemove', this._onMouseMove, false);
         window.document.addEventListener('keydown', this._onKeyDown, false);
         window.document.addEventListener('mouseup', this._onMouseUp, false);
+        // If our element belongs to a different document, also bind to that document
+        if (this._el.ownerDocument && this._el.ownerDocument !== window.document) {
+            this._el.ownerDocument.addEventListener('mousemove', this._onMouseMove, false);
+            this._el.ownerDocument.addEventListener('keydown', this._onKeyDown, false);
+            this._el.ownerDocument.addEventListener('mouseup', this._onMouseUp, false);
+        }
 
         DOM.disableDrag();
         this._startPos = this._lastPos = DOM.mousePos(this._el, e);
@@ -153,6 +159,11 @@ class BoxZoomHandler {
         window.document.removeEventListener('mousemove', this._onMouseMove, false);
         window.document.removeEventListener('keydown', this._onKeyDown, false);
         window.document.removeEventListener('mouseup', this._onMouseUp, false);
+        if (this._el.ownerDocument && this._el.ownerDocument !== window.document) {
+            this._el.ownerDocument.removeEventListener('mousemove', this._onMouseMove, false);
+            this._el.ownerDocument.removeEventListener('keydown', this._onKeyDown, false);
+            this._el.ownerDocument.removeEventListener('mouseup', this._onMouseUp, false);
+        }
 
         this._container.classList.remove('mapboxgl-crosshair');
 

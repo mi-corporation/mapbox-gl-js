@@ -1,10 +1,15 @@
 /rollup/build/
 /docs/components/api.json
-/dist/
+# For the purposes of consuming this fork via github links in dependent package.json
+# files, DON'T ignore /dist/.
+# /dist/
 /docs/pages/dist/mapbox-gl-dev.js
 /docs/pages/dist/mapbox-gl.js
 /docs/pages/dist/mapbox-gl-unminified.js
 *.js.map
+# For the purposes of consuming this fork via github links in dependent package.json
+# files, DON'T ignore .js.map files inside /dist/.
+!/dist/**/*.js.map
 node_modules
 package-lock.json
 *.sublime-*

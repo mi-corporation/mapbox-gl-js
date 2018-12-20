@@ -19806,6 +19806,7 @@ var Worker$1 = function Worker(self) {
     this.layerIndexes = {};
     this.workerSourceTypes = {
         vector: VectorTileWorkerSource,
+        mbtiles: VectorTileWorkerSource,
         geojson: GeoJSONWorkerSource
     };
     this.workerSources = {};
@@ -21840,6 +21841,2462 @@ var CanvasSource = (function (ImageSource$$1) {
     return CanvasSource;
 }(ImageSource));
 
+var common = __chunk_1.createCommonjsModule(function (module, exports) {
+var TYPED_OK = typeof Uint8Array !== 'undefined' && typeof Uint16Array !== 'undefined' && typeof Int32Array !== 'undefined';
+function _has(obj, key) {
+    return Object.prototype.hasOwnProperty.call(obj, key);
+}
+exports.assign = function (obj) {
+    var sources = Array.prototype.slice.call(arguments, 1);
+    while (sources.length) {
+        var source = sources.shift();
+        if (!source) {
+            continue;
+        }
+        if (typeof source !== 'object') {
+            throw new TypeError(source + 'must be non-object');
+        }
+        for (var p in source) {
+            if (_has(source, p)) {
+                obj[p] = source[p];
+            }
+        }
+    }
+    return obj;
+};
+exports.shrinkBuf = function (buf, size) {
+    if (buf.length === size) {
+        return buf;
+    }
+    if (buf.subarray) {
+        return buf.subarray(0, size);
+    }
+    buf.length = size;
+    return buf;
+};
+var fnTyped = {
+    arraySet: function (dest, src, src_offs, len, dest_offs) {
+        if (src.subarray && dest.subarray) {
+            dest.set(src.subarray(src_offs, src_offs + len), dest_offs);
+            return;
+        }
+        for (var i = 0; i < len; i++) {
+            dest[dest_offs + i] = src[src_offs + i];
+        }
+    },
+    flattenChunks: function (chunks) {
+        var i, l, len, pos, chunk, result;
+        len = 0;
+        for (i = 0, l = chunks.length; i < l; i++) {
+            len += chunks[i].length;
+        }
+        result = new Uint8Array(len);
+        pos = 0;
+        for (i = 0, l = chunks.length; i < l; i++) {
+            chunk = chunks[i];
+            result.set(chunk, pos);
+            pos += chunk.length;
+        }
+        return result;
+    }
+};
+var fnUntyped = {
+    arraySet: function (dest, src, src_offs, len, dest_offs) {
+        for (var i = 0; i < len; i++) {
+            dest[dest_offs + i] = src[src_offs + i];
+        }
+    },
+    flattenChunks: function (chunks) {
+        return [].concat.apply([], chunks);
+    }
+};
+exports.setTyped = function (on) {
+    if (on) {
+        exports.Buf8 = Uint8Array;
+        exports.Buf16 = Uint16Array;
+        exports.Buf32 = Int32Array;
+        exports.assign(exports, fnTyped);
+    } else {
+        exports.Buf8 = Array;
+        exports.Buf16 = Array;
+        exports.Buf32 = Array;
+        exports.assign(exports, fnUntyped);
+    }
+};
+exports.setTyped(TYPED_OK);
+});
+var common_1 = common.assign;
+var common_2 = common.shrinkBuf;
+var common_3 = common.setTyped;
+var common_4 = common.Buf8;
+var common_5 = common.Buf16;
+var common_6 = common.Buf32;
+
+function adler32(adler, buf, len, pos) {
+    var s1 = adler & 65535 | 0, s2 = adler >>> 16 & 65535 | 0, n = 0;
+    while (len !== 0) {
+        n = len > 2000 ? 2000 : len;
+        len -= n;
+        do {
+            s1 = s1 + buf[pos++] | 0;
+            s2 = s2 + s1 | 0;
+        } while (--n);
+        s1 %= 65521;
+        s2 %= 65521;
+    }
+    return s1 | s2 << 16 | 0;
+}
+var adler32_1 = adler32;
+
+function makeTable() {
+    var c, table = [];
+    for (var n = 0; n < 256; n++) {
+        c = n;
+        for (var k = 0; k < 8; k++) {
+            c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+        }
+        table[n] = c;
+    }
+    return table;
+}
+var crcTable = makeTable();
+function crc32(crc, buf, len, pos) {
+    var t = crcTable, end = pos + len;
+    crc ^= -1;
+    for (var i = pos; i < end; i++) {
+        crc = crc >>> 8 ^ t[(crc ^ buf[i]) & 255];
+    }
+    return crc ^ -1;
+}
+var crc32_1 = crc32;
+
+var BAD = 30;
+var TYPE = 12;
+var inffast = function inflate_fast(strm, start) {
+    var state;
+    var _in;
+    var last;
+    var _out;
+    var beg;
+    var end;
+    var dmax;
+    var wsize;
+    var whave;
+    var wnext;
+    var s_window;
+    var hold;
+    var bits;
+    var lcode;
+    var dcode;
+    var lmask;
+    var dmask;
+    var here;
+    var op;
+    var len;
+    var dist;
+    var from;
+    var from_source;
+    var input, output;
+    state = strm.state;
+    _in = strm.next_in;
+    input = strm.input;
+    last = _in + (strm.avail_in - 5);
+    _out = strm.next_out;
+    output = strm.output;
+    beg = _out - (start - strm.avail_out);
+    end = _out + (strm.avail_out - 257);
+    dmax = state.dmax;
+    wsize = state.wsize;
+    whave = state.whave;
+    wnext = state.wnext;
+    s_window = state.window;
+    hold = state.hold;
+    bits = state.bits;
+    lcode = state.lencode;
+    dcode = state.distcode;
+    lmask = (1 << state.lenbits) - 1;
+    dmask = (1 << state.distbits) - 1;
+    top:
+        do {
+            if (bits < 15) {
+                hold += input[_in++] << bits;
+                bits += 8;
+                hold += input[_in++] << bits;
+                bits += 8;
+            }
+            here = lcode[hold & lmask];
+            dolen:
+                for (;;) {
+                    op = here >>> 24;
+                    hold >>>= op;
+                    bits -= op;
+                    op = here >>> 16 & 255;
+                    if (op === 0) {
+                        output[_out++] = here & 65535;
+                    } else if (op & 16) {
+                        len = here & 65535;
+                        op &= 15;
+                        if (op) {
+                            if (bits < op) {
+                                hold += input[_in++] << bits;
+                                bits += 8;
+                            }
+                            len += hold & (1 << op) - 1;
+                            hold >>>= op;
+                            bits -= op;
+                        }
+                        if (bits < 15) {
+                            hold += input[_in++] << bits;
+                            bits += 8;
+                            hold += input[_in++] << bits;
+                            bits += 8;
+                        }
+                        here = dcode[hold & dmask];
+                        dodist:
+                            for (;;) {
+                                op = here >>> 24;
+                                hold >>>= op;
+                                bits -= op;
+                                op = here >>> 16 & 255;
+                                if (op & 16) {
+                                    dist = here & 65535;
+                                    op &= 15;
+                                    if (bits < op) {
+                                        hold += input[_in++] << bits;
+                                        bits += 8;
+                                        if (bits < op) {
+                                            hold += input[_in++] << bits;
+                                            bits += 8;
+                                        }
+                                    }
+                                    dist += hold & (1 << op) - 1;
+                                    if (dist > dmax) {
+                                        strm.msg = 'invalid distance too far back';
+                                        state.mode = BAD;
+                                        break top;
+                                    }
+                                    hold >>>= op;
+                                    bits -= op;
+                                    op = _out - beg;
+                                    if (dist > op) {
+                                        op = dist - op;
+                                        if (op > whave) {
+                                            if (state.sane) {
+                                                strm.msg = 'invalid distance too far back';
+                                                state.mode = BAD;
+                                                break top;
+                                            }
+                                        }
+                                        from = 0;
+                                        from_source = s_window;
+                                        if (wnext === 0) {
+                                            from += wsize - op;
+                                            if (op < len) {
+                                                len -= op;
+                                                do {
+                                                    output[_out++] = s_window[from++];
+                                                } while (--op);
+                                                from = _out - dist;
+                                                from_source = output;
+                                            }
+                                        } else if (wnext < op) {
+                                            from += wsize + wnext - op;
+                                            op -= wnext;
+                                            if (op < len) {
+                                                len -= op;
+                                                do {
+                                                    output[_out++] = s_window[from++];
+                                                } while (--op);
+                                                from = 0;
+                                                if (wnext < len) {
+                                                    op = wnext;
+                                                    len -= op;
+                                                    do {
+                                                        output[_out++] = s_window[from++];
+                                                    } while (--op);
+                                                    from = _out - dist;
+                                                    from_source = output;
+                                                }
+                                            }
+                                        } else {
+                                            from += wnext - op;
+                                            if (op < len) {
+                                                len -= op;
+                                                do {
+                                                    output[_out++] = s_window[from++];
+                                                } while (--op);
+                                                from = _out - dist;
+                                                from_source = output;
+                                            }
+                                        }
+                                        while (len > 2) {
+                                            output[_out++] = from_source[from++];
+                                            output[_out++] = from_source[from++];
+                                            output[_out++] = from_source[from++];
+                                            len -= 3;
+                                        }
+                                        if (len) {
+                                            output[_out++] = from_source[from++];
+                                            if (len > 1) {
+                                                output[_out++] = from_source[from++];
+                                            }
+                                        }
+                                    } else {
+                                        from = _out - dist;
+                                        do {
+                                            output[_out++] = output[from++];
+                                            output[_out++] = output[from++];
+                                            output[_out++] = output[from++];
+                                            len -= 3;
+                                        } while (len > 2);
+                                        if (len) {
+                                            output[_out++] = output[from++];
+                                            if (len > 1) {
+                                                output[_out++] = output[from++];
+                                            }
+                                        }
+                                    }
+                                } else if ((op & 64) === 0) {
+                                    here = dcode[(here & 65535) + (hold & (1 << op) - 1)];
+                                    continue dodist;
+                                } else {
+                                    strm.msg = 'invalid distance code';
+                                    state.mode = BAD;
+                                    break top;
+                                }
+                                break;
+                            }
+                    } else if ((op & 64) === 0) {
+                        here = lcode[(here & 65535) + (hold & (1 << op) - 1)];
+                        continue dolen;
+                    } else if (op & 32) {
+                        state.mode = TYPE;
+                        break top;
+                    } else {
+                        strm.msg = 'invalid literal/length code';
+                        state.mode = BAD;
+                        break top;
+                    }
+                    break;
+                }
+        } while (_in < last && _out < end);
+    len = bits >> 3;
+    _in -= len;
+    bits -= len << 3;
+    hold &= (1 << bits) - 1;
+    strm.next_in = _in;
+    strm.next_out = _out;
+    strm.avail_in = _in < last ? 5 + (last - _in) : 5 - (_in - last);
+    strm.avail_out = _out < end ? 257 + (end - _out) : 257 - (_out - end);
+    state.hold = hold;
+    state.bits = bits;
+    return;
+};
+
+var MAXBITS = 15;
+var ENOUGH_LENS = 852;
+var ENOUGH_DISTS = 592;
+var CODES = 0;
+var LENS = 1;
+var DISTS = 2;
+var lbase = [
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    13,
+    15,
+    17,
+    19,
+    23,
+    27,
+    31,
+    35,
+    43,
+    51,
+    59,
+    67,
+    83,
+    99,
+    115,
+    131,
+    163,
+    195,
+    227,
+    258,
+    0,
+    0
+];
+var lext = [
+    16,
+    16,
+    16,
+    16,
+    16,
+    16,
+    16,
+    16,
+    17,
+    17,
+    17,
+    17,
+    18,
+    18,
+    18,
+    18,
+    19,
+    19,
+    19,
+    19,
+    20,
+    20,
+    20,
+    20,
+    21,
+    21,
+    21,
+    21,
+    16,
+    72,
+    78
+];
+var dbase = [
+    1,
+    2,
+    3,
+    4,
+    5,
+    7,
+    9,
+    13,
+    17,
+    25,
+    33,
+    49,
+    65,
+    97,
+    129,
+    193,
+    257,
+    385,
+    513,
+    769,
+    1025,
+    1537,
+    2049,
+    3073,
+    4097,
+    6145,
+    8193,
+    12289,
+    16385,
+    24577,
+    0,
+    0
+];
+var dext = [
+    16,
+    16,
+    16,
+    16,
+    17,
+    17,
+    18,
+    18,
+    19,
+    19,
+    20,
+    20,
+    21,
+    21,
+    22,
+    22,
+    23,
+    23,
+    24,
+    24,
+    25,
+    25,
+    26,
+    26,
+    27,
+    27,
+    28,
+    28,
+    29,
+    29,
+    64,
+    64
+];
+var inftrees = function inflate_table(type, lens, lens_index, codes, table, table_index, work, opts) {
+    var bits = opts.bits;
+    var len = 0;
+    var sym = 0;
+    var min = 0, max = 0;
+    var root = 0;
+    var curr = 0;
+    var drop = 0;
+    var left = 0;
+    var used = 0;
+    var huff = 0;
+    var incr;
+    var fill;
+    var low;
+    var mask;
+    var next;
+    var base = null;
+    var base_index = 0;
+    var end;
+    var count = new common.Buf16(MAXBITS + 1);
+    var offs = new common.Buf16(MAXBITS + 1);
+    var extra = null;
+    var extra_index = 0;
+    var here_bits, here_op, here_val;
+    for (len = 0; len <= MAXBITS; len++) {
+        count[len] = 0;
+    }
+    for (sym = 0; sym < codes; sym++) {
+        count[lens[lens_index + sym]]++;
+    }
+    root = bits;
+    for (max = MAXBITS; max >= 1; max--) {
+        if (count[max] !== 0) {
+            break;
+        }
+    }
+    if (root > max) {
+        root = max;
+    }
+    if (max === 0) {
+        table[table_index++] = 1 << 24 | 64 << 16 | 0;
+        table[table_index++] = 1 << 24 | 64 << 16 | 0;
+        opts.bits = 1;
+        return 0;
+    }
+    for (min = 1; min < max; min++) {
+        if (count[min] !== 0) {
+            break;
+        }
+    }
+    if (root < min) {
+        root = min;
+    }
+    left = 1;
+    for (len = 1; len <= MAXBITS; len++) {
+        left <<= 1;
+        left -= count[len];
+        if (left < 0) {
+            return -1;
+        }
+    }
+    if (left > 0 && (type === CODES || max !== 1)) {
+        return -1;
+    }
+    offs[1] = 0;
+    for (len = 1; len < MAXBITS; len++) {
+        offs[len + 1] = offs[len] + count[len];
+    }
+    for (sym = 0; sym < codes; sym++) {
+        if (lens[lens_index + sym] !== 0) {
+            work[offs[lens[lens_index + sym]]++] = sym;
+        }
+    }
+    if (type === CODES) {
+        base = extra = work;
+        end = 19;
+    } else if (type === LENS) {
+        base = lbase;
+        base_index -= 257;
+        extra = lext;
+        extra_index -= 257;
+        end = 256;
+    } else {
+        base = dbase;
+        extra = dext;
+        end = -1;
+    }
+    huff = 0;
+    sym = 0;
+    len = min;
+    next = table_index;
+    curr = root;
+    drop = 0;
+    low = -1;
+    used = 1 << root;
+    mask = used - 1;
+    if (type === LENS && used > ENOUGH_LENS || type === DISTS && used > ENOUGH_DISTS) {
+        return 1;
+    }
+    for (;;) {
+        here_bits = len - drop;
+        if (work[sym] < end) {
+            here_op = 0;
+            here_val = work[sym];
+        } else if (work[sym] > end) {
+            here_op = extra[extra_index + work[sym]];
+            here_val = base[base_index + work[sym]];
+        } else {
+            here_op = 32 + 64;
+            here_val = 0;
+        }
+        incr = 1 << len - drop;
+        fill = 1 << curr;
+        min = fill;
+        do {
+            fill -= incr;
+            table[next + (huff >> drop) + fill] = here_bits << 24 | here_op << 16 | here_val | 0;
+        } while (fill !== 0);
+        incr = 1 << len - 1;
+        while (huff & incr) {
+            incr >>= 1;
+        }
+        if (incr !== 0) {
+            huff &= incr - 1;
+            huff += incr;
+        } else {
+            huff = 0;
+        }
+        sym++;
+        if (--count[len] === 0) {
+            if (len === max) {
+                break;
+            }
+            len = lens[lens_index + work[sym]];
+        }
+        if (len > root && (huff & mask) !== low) {
+            if (drop === 0) {
+                drop = root;
+            }
+            next += min;
+            curr = len - drop;
+            left = 1 << curr;
+            while (curr + drop < max) {
+                left -= count[curr + drop];
+                if (left <= 0) {
+                    break;
+                }
+                curr++;
+                left <<= 1;
+            }
+            used += 1 << curr;
+            if (type === LENS && used > ENOUGH_LENS || type === DISTS && used > ENOUGH_DISTS) {
+                return 1;
+            }
+            low = huff & mask;
+            table[low] = root << 24 | curr << 16 | next - table_index | 0;
+        }
+    }
+    if (huff !== 0) {
+        table[next + huff] = len - drop << 24 | 64 << 16 | 0;
+    }
+    opts.bits = root;
+    return 0;
+};
+
+var CODES$1 = 0;
+var LENS$1 = 1;
+var DISTS$1 = 2;
+var Z_FINISH = 4;
+var Z_BLOCK = 5;
+var Z_TREES = 6;
+var Z_OK = 0;
+var Z_STREAM_END = 1;
+var Z_NEED_DICT = 2;
+var Z_STREAM_ERROR = -2;
+var Z_DATA_ERROR = -3;
+var Z_MEM_ERROR = -4;
+var Z_BUF_ERROR = -5;
+var Z_DEFLATED = 8;
+var HEAD = 1;
+var FLAGS = 2;
+var TIME = 3;
+var OS = 4;
+var EXLEN = 5;
+var EXTRA = 6;
+var NAME = 7;
+var COMMENT = 8;
+var HCRC = 9;
+var DICTID = 10;
+var DICT = 11;
+var TYPE$1 = 12;
+var TYPEDO = 13;
+var STORED = 14;
+var COPY_ = 15;
+var COPY = 16;
+var TABLE = 17;
+var LENLENS = 18;
+var CODELENS = 19;
+var LEN_ = 20;
+var LEN = 21;
+var LENEXT = 22;
+var DIST = 23;
+var DISTEXT = 24;
+var MATCH = 25;
+var LIT = 26;
+var CHECK = 27;
+var LENGTH = 28;
+var DONE = 29;
+var BAD$1 = 30;
+var MEM = 31;
+var SYNC = 32;
+var ENOUGH_LENS$1 = 852;
+var ENOUGH_DISTS$1 = 592;
+var MAX_WBITS = 15;
+var DEF_WBITS = MAX_WBITS;
+function zswap32(q) {
+    return (q >>> 24 & 255) + (q >>> 8 & 65280) + ((q & 65280) << 8) + ((q & 255) << 24);
+}
+function InflateState() {
+    this.mode = 0;
+    this.last = false;
+    this.wrap = 0;
+    this.havedict = false;
+    this.flags = 0;
+    this.dmax = 0;
+    this.check = 0;
+    this.total = 0;
+    this.head = null;
+    this.wbits = 0;
+    this.wsize = 0;
+    this.whave = 0;
+    this.wnext = 0;
+    this.window = null;
+    this.hold = 0;
+    this.bits = 0;
+    this.length = 0;
+    this.offset = 0;
+    this.extra = 0;
+    this.lencode = null;
+    this.distcode = null;
+    this.lenbits = 0;
+    this.distbits = 0;
+    this.ncode = 0;
+    this.nlen = 0;
+    this.ndist = 0;
+    this.have = 0;
+    this.next = null;
+    this.lens = new common.Buf16(320);
+    this.work = new common.Buf16(288);
+    this.lendyn = null;
+    this.distdyn = null;
+    this.sane = 0;
+    this.back = 0;
+    this.was = 0;
+}
+function inflateResetKeep(strm) {
+    var state;
+    if (!strm || !strm.state) {
+        return Z_STREAM_ERROR;
+    }
+    state = strm.state;
+    strm.total_in = strm.total_out = state.total = 0;
+    strm.msg = '';
+    if (state.wrap) {
+        strm.adler = state.wrap & 1;
+    }
+    state.mode = HEAD;
+    state.last = 0;
+    state.havedict = 0;
+    state.dmax = 32768;
+    state.head = null;
+    state.hold = 0;
+    state.bits = 0;
+    state.lencode = state.lendyn = new common.Buf32(ENOUGH_LENS$1);
+    state.distcode = state.distdyn = new common.Buf32(ENOUGH_DISTS$1);
+    state.sane = 1;
+    state.back = -1;
+    return Z_OK;
+}
+function inflateReset(strm) {
+    var state;
+    if (!strm || !strm.state) {
+        return Z_STREAM_ERROR;
+    }
+    state = strm.state;
+    state.wsize = 0;
+    state.whave = 0;
+    state.wnext = 0;
+    return inflateResetKeep(strm);
+}
+function inflateReset2(strm, windowBits) {
+    var wrap;
+    var state;
+    if (!strm || !strm.state) {
+        return Z_STREAM_ERROR;
+    }
+    state = strm.state;
+    if (windowBits < 0) {
+        wrap = 0;
+        windowBits = -windowBits;
+    } else {
+        wrap = (windowBits >> 4) + 1;
+        if (windowBits < 48) {
+            windowBits &= 15;
+        }
+    }
+    if (windowBits && (windowBits < 8 || windowBits > 15)) {
+        return Z_STREAM_ERROR;
+    }
+    if (state.window !== null && state.wbits !== windowBits) {
+        state.window = null;
+    }
+    state.wrap = wrap;
+    state.wbits = windowBits;
+    return inflateReset(strm);
+}
+function inflateInit2(strm, windowBits) {
+    var ret;
+    var state;
+    if (!strm) {
+        return Z_STREAM_ERROR;
+    }
+    state = new InflateState();
+    strm.state = state;
+    state.window = null;
+    ret = inflateReset2(strm, windowBits);
+    if (ret !== Z_OK) {
+        strm.state = null;
+    }
+    return ret;
+}
+function inflateInit(strm) {
+    return inflateInit2(strm, DEF_WBITS);
+}
+var virgin = true;
+var lenfix, distfix;
+function fixedtables(state) {
+    if (virgin) {
+        var sym;
+        lenfix = new common.Buf32(512);
+        distfix = new common.Buf32(32);
+        sym = 0;
+        while (sym < 144) {
+            state.lens[sym++] = 8;
+        }
+        while (sym < 256) {
+            state.lens[sym++] = 9;
+        }
+        while (sym < 280) {
+            state.lens[sym++] = 7;
+        }
+        while (sym < 288) {
+            state.lens[sym++] = 8;
+        }
+        inftrees(LENS$1, state.lens, 0, 288, lenfix, 0, state.work, { bits: 9 });
+        sym = 0;
+        while (sym < 32) {
+            state.lens[sym++] = 5;
+        }
+        inftrees(DISTS$1, state.lens, 0, 32, distfix, 0, state.work, { bits: 5 });
+        virgin = false;
+    }
+    state.lencode = lenfix;
+    state.lenbits = 9;
+    state.distcode = distfix;
+    state.distbits = 5;
+}
+function updatewindow(strm, src, end, copy) {
+    var dist;
+    var state = strm.state;
+    if (state.window === null) {
+        state.wsize = 1 << state.wbits;
+        state.wnext = 0;
+        state.whave = 0;
+        state.window = new common.Buf8(state.wsize);
+    }
+    if (copy >= state.wsize) {
+        common.arraySet(state.window, src, end - state.wsize, state.wsize, 0);
+        state.wnext = 0;
+        state.whave = state.wsize;
+    } else {
+        dist = state.wsize - state.wnext;
+        if (dist > copy) {
+            dist = copy;
+        }
+        common.arraySet(state.window, src, end - copy, dist, state.wnext);
+        copy -= dist;
+        if (copy) {
+            common.arraySet(state.window, src, end - copy, copy, 0);
+            state.wnext = copy;
+            state.whave = state.wsize;
+        } else {
+            state.wnext += dist;
+            if (state.wnext === state.wsize) {
+                state.wnext = 0;
+            }
+            if (state.whave < state.wsize) {
+                state.whave += dist;
+            }
+        }
+    }
+    return 0;
+}
+function inflate(strm, flush) {
+    var state;
+    var input, output;
+    var next;
+    var put;
+    var have, left;
+    var hold;
+    var bits;
+    var _in, _out;
+    var copy;
+    var from;
+    var from_source;
+    var here = 0;
+    var here_bits, here_op, here_val;
+    var last_bits, last_op, last_val;
+    var len;
+    var ret;
+    var hbuf = new common.Buf8(4);
+    var opts;
+    var n;
+    var order = [
+        16,
+        17,
+        18,
+        0,
+        8,
+        7,
+        9,
+        6,
+        10,
+        5,
+        11,
+        4,
+        12,
+        3,
+        13,
+        2,
+        14,
+        1,
+        15
+    ];
+    if (!strm || !strm.state || !strm.output || !strm.input && strm.avail_in !== 0) {
+        return Z_STREAM_ERROR;
+    }
+    state = strm.state;
+    if (state.mode === TYPE$1) {
+        state.mode = TYPEDO;
+    }
+    put = strm.next_out;
+    output = strm.output;
+    left = strm.avail_out;
+    next = strm.next_in;
+    input = strm.input;
+    have = strm.avail_in;
+    hold = state.hold;
+    bits = state.bits;
+    _in = have;
+    _out = left;
+    ret = Z_OK;
+    inf_leave:
+        for (;;) {
+            switch (state.mode) {
+            case HEAD:
+                if (state.wrap === 0) {
+                    state.mode = TYPEDO;
+                    break;
+                }
+                while (bits < 16) {
+                    if (have === 0) {
+                        break inf_leave;
+                    }
+                    have--;
+                    hold += input[next++] << bits;
+                    bits += 8;
+                }
+                if (state.wrap & 2 && hold === 35615) {
+                    state.check = 0;
+                    hbuf[0] = hold & 255;
+                    hbuf[1] = hold >>> 8 & 255;
+                    state.check = crc32_1(state.check, hbuf, 2, 0);
+                    hold = 0;
+                    bits = 0;
+                    state.mode = FLAGS;
+                    break;
+                }
+                state.flags = 0;
+                if (state.head) {
+                    state.head.done = false;
+                }
+                if (!(state.wrap & 1) || (((hold & 255) << 8) + (hold >> 8)) % 31) {
+                    strm.msg = 'incorrect header check';
+                    state.mode = BAD$1;
+                    break;
+                }
+                if ((hold & 15) !== Z_DEFLATED) {
+                    strm.msg = 'unknown compression method';
+                    state.mode = BAD$1;
+                    break;
+                }
+                hold >>>= 4;
+                bits -= 4;
+                len = (hold & 15) + 8;
+                if (state.wbits === 0) {
+                    state.wbits = len;
+                } else if (len > state.wbits) {
+                    strm.msg = 'invalid window size';
+                    state.mode = BAD$1;
+                    break;
+                }
+                state.dmax = 1 << len;
+                strm.adler = state.check = 1;
+                state.mode = hold & 512 ? DICTID : TYPE$1;
+                hold = 0;
+                bits = 0;
+                break;
+            case FLAGS:
+                while (bits < 16) {
+                    if (have === 0) {
+                        break inf_leave;
+                    }
+                    have--;
+                    hold += input[next++] << bits;
+                    bits += 8;
+                }
+                state.flags = hold;
+                if ((state.flags & 255) !== Z_DEFLATED) {
+                    strm.msg = 'unknown compression method';
+                    state.mode = BAD$1;
+                    break;
+                }
+                if (state.flags & 57344) {
+                    strm.msg = 'unknown header flags set';
+                    state.mode = BAD$1;
+                    break;
+                }
+                if (state.head) {
+                    state.head.text = hold >> 8 & 1;
+                }
+                if (state.flags & 512) {
+                    hbuf[0] = hold & 255;
+                    hbuf[1] = hold >>> 8 & 255;
+                    state.check = crc32_1(state.check, hbuf, 2, 0);
+                }
+                hold = 0;
+                bits = 0;
+                state.mode = TIME;
+            case TIME:
+                while (bits < 32) {
+                    if (have === 0) {
+                        break inf_leave;
+                    }
+                    have--;
+                    hold += input[next++] << bits;
+                    bits += 8;
+                }
+                if (state.head) {
+                    state.head.time = hold;
+                }
+                if (state.flags & 512) {
+                    hbuf[0] = hold & 255;
+                    hbuf[1] = hold >>> 8 & 255;
+                    hbuf[2] = hold >>> 16 & 255;
+                    hbuf[3] = hold >>> 24 & 255;
+                    state.check = crc32_1(state.check, hbuf, 4, 0);
+                }
+                hold = 0;
+                bits = 0;
+                state.mode = OS;
+            case OS:
+                while (bits < 16) {
+                    if (have === 0) {
+                        break inf_leave;
+                    }
+                    have--;
+                    hold += input[next++] << bits;
+                    bits += 8;
+                }
+                if (state.head) {
+                    state.head.xflags = hold & 255;
+                    state.head.os = hold >> 8;
+                }
+                if (state.flags & 512) {
+                    hbuf[0] = hold & 255;
+                    hbuf[1] = hold >>> 8 & 255;
+                    state.check = crc32_1(state.check, hbuf, 2, 0);
+                }
+                hold = 0;
+                bits = 0;
+                state.mode = EXLEN;
+            case EXLEN:
+                if (state.flags & 1024) {
+                    while (bits < 16) {
+                        if (have === 0) {
+                            break inf_leave;
+                        }
+                        have--;
+                        hold += input[next++] << bits;
+                        bits += 8;
+                    }
+                    state.length = hold;
+                    if (state.head) {
+                        state.head.extra_len = hold;
+                    }
+                    if (state.flags & 512) {
+                        hbuf[0] = hold & 255;
+                        hbuf[1] = hold >>> 8 & 255;
+                        state.check = crc32_1(state.check, hbuf, 2, 0);
+                    }
+                    hold = 0;
+                    bits = 0;
+                } else if (state.head) {
+                    state.head.extra = null;
+                }
+                state.mode = EXTRA;
+            case EXTRA:
+                if (state.flags & 1024) {
+                    copy = state.length;
+                    if (copy > have) {
+                        copy = have;
+                    }
+                    if (copy) {
+                        if (state.head) {
+                            len = state.head.extra_len - state.length;
+                            if (!state.head.extra) {
+                                state.head.extra = new Array(state.head.extra_len);
+                            }
+                            common.arraySet(state.head.extra, input, next, copy, len);
+                        }
+                        if (state.flags & 512) {
+                            state.check = crc32_1(state.check, input, copy, next);
+                        }
+                        have -= copy;
+                        next += copy;
+                        state.length -= copy;
+                    }
+                    if (state.length) {
+                        break inf_leave;
+                    }
+                }
+                state.length = 0;
+                state.mode = NAME;
+            case NAME:
+                if (state.flags & 2048) {
+                    if (have === 0) {
+                        break inf_leave;
+                    }
+                    copy = 0;
+                    do {
+                        len = input[next + copy++];
+                        if (state.head && len && state.length < 65536) {
+                            state.head.name += String.fromCharCode(len);
+                        }
+                    } while (len && copy < have);
+                    if (state.flags & 512) {
+                        state.check = crc32_1(state.check, input, copy, next);
+                    }
+                    have -= copy;
+                    next += copy;
+                    if (len) {
+                        break inf_leave;
+                    }
+                } else if (state.head) {
+                    state.head.name = null;
+                }
+                state.length = 0;
+                state.mode = COMMENT;
+            case COMMENT:
+                if (state.flags & 4096) {
+                    if (have === 0) {
+                        break inf_leave;
+                    }
+                    copy = 0;
+                    do {
+                        len = input[next + copy++];
+                        if (state.head && len && state.length < 65536) {
+                            state.head.comment += String.fromCharCode(len);
+                        }
+                    } while (len && copy < have);
+                    if (state.flags & 512) {
+                        state.check = crc32_1(state.check, input, copy, next);
+                    }
+                    have -= copy;
+                    next += copy;
+                    if (len) {
+                        break inf_leave;
+                    }
+                } else if (state.head) {
+                    state.head.comment = null;
+                }
+                state.mode = HCRC;
+            case HCRC:
+                if (state.flags & 512) {
+                    while (bits < 16) {
+                        if (have === 0) {
+                            break inf_leave;
+                        }
+                        have--;
+                        hold += input[next++] << bits;
+                        bits += 8;
+                    }
+                    if (hold !== (state.check & 65535)) {
+                        strm.msg = 'header crc mismatch';
+                        state.mode = BAD$1;
+                        break;
+                    }
+                    hold = 0;
+                    bits = 0;
+                }
+                if (state.head) {
+                    state.head.hcrc = state.flags >> 9 & 1;
+                    state.head.done = true;
+                }
+                strm.adler = state.check = 0;
+                state.mode = TYPE$1;
+                break;
+            case DICTID:
+                while (bits < 32) {
+                    if (have === 0) {
+                        break inf_leave;
+                    }
+                    have--;
+                    hold += input[next++] << bits;
+                    bits += 8;
+                }
+                strm.adler = state.check = zswap32(hold);
+                hold = 0;
+                bits = 0;
+                state.mode = DICT;
+            case DICT:
+                if (state.havedict === 0) {
+                    strm.next_out = put;
+                    strm.avail_out = left;
+                    strm.next_in = next;
+                    strm.avail_in = have;
+                    state.hold = hold;
+                    state.bits = bits;
+                    return Z_NEED_DICT;
+                }
+                strm.adler = state.check = 1;
+                state.mode = TYPE$1;
+            case TYPE$1:
+                if (flush === Z_BLOCK || flush === Z_TREES) {
+                    break inf_leave;
+                }
+            case TYPEDO:
+                if (state.last) {
+                    hold >>>= bits & 7;
+                    bits -= bits & 7;
+                    state.mode = CHECK;
+                    break;
+                }
+                while (bits < 3) {
+                    if (have === 0) {
+                        break inf_leave;
+                    }
+                    have--;
+                    hold += input[next++] << bits;
+                    bits += 8;
+                }
+                state.last = hold & 1;
+                hold >>>= 1;
+                bits -= 1;
+                switch (hold & 3) {
+                case 0:
+                    state.mode = STORED;
+                    break;
+                case 1:
+                    fixedtables(state);
+                    state.mode = LEN_;
+                    if (flush === Z_TREES) {
+                        hold >>>= 2;
+                        bits -= 2;
+                        break inf_leave;
+                    }
+                    break;
+                case 2:
+                    state.mode = TABLE;
+                    break;
+                case 3:
+                    strm.msg = 'invalid block type';
+                    state.mode = BAD$1;
+                }
+                hold >>>= 2;
+                bits -= 2;
+                break;
+            case STORED:
+                hold >>>= bits & 7;
+                bits -= bits & 7;
+                while (bits < 32) {
+                    if (have === 0) {
+                        break inf_leave;
+                    }
+                    have--;
+                    hold += input[next++] << bits;
+                    bits += 8;
+                }
+                if ((hold & 65535) !== (hold >>> 16 ^ 65535)) {
+                    strm.msg = 'invalid stored block lengths';
+                    state.mode = BAD$1;
+                    break;
+                }
+                state.length = hold & 65535;
+                hold = 0;
+                bits = 0;
+                state.mode = COPY_;
+                if (flush === Z_TREES) {
+                    break inf_leave;
+                }
+            case COPY_:
+                state.mode = COPY;
+            case COPY:
+                copy = state.length;
+                if (copy) {
+                    if (copy > have) {
+                        copy = have;
+                    }
+                    if (copy > left) {
+                        copy = left;
+                    }
+                    if (copy === 0) {
+                        break inf_leave;
+                    }
+                    common.arraySet(output, input, next, copy, put);
+                    have -= copy;
+                    next += copy;
+                    left -= copy;
+                    put += copy;
+                    state.length -= copy;
+                    break;
+                }
+                state.mode = TYPE$1;
+                break;
+            case TABLE:
+                while (bits < 14) {
+                    if (have === 0) {
+                        break inf_leave;
+                    }
+                    have--;
+                    hold += input[next++] << bits;
+                    bits += 8;
+                }
+                state.nlen = (hold & 31) + 257;
+                hold >>>= 5;
+                bits -= 5;
+                state.ndist = (hold & 31) + 1;
+                hold >>>= 5;
+                bits -= 5;
+                state.ncode = (hold & 15) + 4;
+                hold >>>= 4;
+                bits -= 4;
+                if (state.nlen > 286 || state.ndist > 30) {
+                    strm.msg = 'too many length or distance symbols';
+                    state.mode = BAD$1;
+                    break;
+                }
+                state.have = 0;
+                state.mode = LENLENS;
+            case LENLENS:
+                while (state.have < state.ncode) {
+                    while (bits < 3) {
+                        if (have === 0) {
+                            break inf_leave;
+                        }
+                        have--;
+                        hold += input[next++] << bits;
+                        bits += 8;
+                    }
+                    state.lens[order[state.have++]] = hold & 7;
+                    hold >>>= 3;
+                    bits -= 3;
+                }
+                while (state.have < 19) {
+                    state.lens[order[state.have++]] = 0;
+                }
+                state.lencode = state.lendyn;
+                state.lenbits = 7;
+                opts = { bits: state.lenbits };
+                ret = inftrees(CODES$1, state.lens, 0, 19, state.lencode, 0, state.work, opts);
+                state.lenbits = opts.bits;
+                if (ret) {
+                    strm.msg = 'invalid code lengths set';
+                    state.mode = BAD$1;
+                    break;
+                }
+                state.have = 0;
+                state.mode = CODELENS;
+            case CODELENS:
+                while (state.have < state.nlen + state.ndist) {
+                    for (;;) {
+                        here = state.lencode[hold & (1 << state.lenbits) - 1];
+                        here_bits = here >>> 24;
+                        here_op = here >>> 16 & 255;
+                        here_val = here & 65535;
+                        if (here_bits <= bits) {
+                            break;
+                        }
+                        if (have === 0) {
+                            break inf_leave;
+                        }
+                        have--;
+                        hold += input[next++] << bits;
+                        bits += 8;
+                    }
+                    if (here_val < 16) {
+                        hold >>>= here_bits;
+                        bits -= here_bits;
+                        state.lens[state.have++] = here_val;
+                    } else {
+                        if (here_val === 16) {
+                            n = here_bits + 2;
+                            while (bits < n) {
+                                if (have === 0) {
+                                    break inf_leave;
+                                }
+                                have--;
+                                hold += input[next++] << bits;
+                                bits += 8;
+                            }
+                            hold >>>= here_bits;
+                            bits -= here_bits;
+                            if (state.have === 0) {
+                                strm.msg = 'invalid bit length repeat';
+                                state.mode = BAD$1;
+                                break;
+                            }
+                            len = state.lens[state.have - 1];
+                            copy = 3 + (hold & 3);
+                            hold >>>= 2;
+                            bits -= 2;
+                        } else if (here_val === 17) {
+                            n = here_bits + 3;
+                            while (bits < n) {
+                                if (have === 0) {
+                                    break inf_leave;
+                                }
+                                have--;
+                                hold += input[next++] << bits;
+                                bits += 8;
+                            }
+                            hold >>>= here_bits;
+                            bits -= here_bits;
+                            len = 0;
+                            copy = 3 + (hold & 7);
+                            hold >>>= 3;
+                            bits -= 3;
+                        } else {
+                            n = here_bits + 7;
+                            while (bits < n) {
+                                if (have === 0) {
+                                    break inf_leave;
+                                }
+                                have--;
+                                hold += input[next++] << bits;
+                                bits += 8;
+                            }
+                            hold >>>= here_bits;
+                            bits -= here_bits;
+                            len = 0;
+                            copy = 11 + (hold & 127);
+                            hold >>>= 7;
+                            bits -= 7;
+                        }
+                        if (state.have + copy > state.nlen + state.ndist) {
+                            strm.msg = 'invalid bit length repeat';
+                            state.mode = BAD$1;
+                            break;
+                        }
+                        while (copy--) {
+                            state.lens[state.have++] = len;
+                        }
+                    }
+                }
+                if (state.mode === BAD$1) {
+                    break;
+                }
+                if (state.lens[256] === 0) {
+                    strm.msg = 'invalid code -- missing end-of-block';
+                    state.mode = BAD$1;
+                    break;
+                }
+                state.lenbits = 9;
+                opts = { bits: state.lenbits };
+                ret = inftrees(LENS$1, state.lens, 0, state.nlen, state.lencode, 0, state.work, opts);
+                state.lenbits = opts.bits;
+                if (ret) {
+                    strm.msg = 'invalid literal/lengths set';
+                    state.mode = BAD$1;
+                    break;
+                }
+                state.distbits = 6;
+                state.distcode = state.distdyn;
+                opts = { bits: state.distbits };
+                ret = inftrees(DISTS$1, state.lens, state.nlen, state.ndist, state.distcode, 0, state.work, opts);
+                state.distbits = opts.bits;
+                if (ret) {
+                    strm.msg = 'invalid distances set';
+                    state.mode = BAD$1;
+                    break;
+                }
+                state.mode = LEN_;
+                if (flush === Z_TREES) {
+                    break inf_leave;
+                }
+            case LEN_:
+                state.mode = LEN;
+            case LEN:
+                if (have >= 6 && left >= 258) {
+                    strm.next_out = put;
+                    strm.avail_out = left;
+                    strm.next_in = next;
+                    strm.avail_in = have;
+                    state.hold = hold;
+                    state.bits = bits;
+                    inffast(strm, _out);
+                    put = strm.next_out;
+                    output = strm.output;
+                    left = strm.avail_out;
+                    next = strm.next_in;
+                    input = strm.input;
+                    have = strm.avail_in;
+                    hold = state.hold;
+                    bits = state.bits;
+                    if (state.mode === TYPE$1) {
+                        state.back = -1;
+                    }
+                    break;
+                }
+                state.back = 0;
+                for (;;) {
+                    here = state.lencode[hold & (1 << state.lenbits) - 1];
+                    here_bits = here >>> 24;
+                    here_op = here >>> 16 & 255;
+                    here_val = here & 65535;
+                    if (here_bits <= bits) {
+                        break;
+                    }
+                    if (have === 0) {
+                        break inf_leave;
+                    }
+                    have--;
+                    hold += input[next++] << bits;
+                    bits += 8;
+                }
+                if (here_op && (here_op & 240) === 0) {
+                    last_bits = here_bits;
+                    last_op = here_op;
+                    last_val = here_val;
+                    for (;;) {
+                        here = state.lencode[last_val + ((hold & (1 << last_bits + last_op) - 1) >> last_bits)];
+                        here_bits = here >>> 24;
+                        here_op = here >>> 16 & 255;
+                        here_val = here & 65535;
+                        if (last_bits + here_bits <= bits) {
+                            break;
+                        }
+                        if (have === 0) {
+                            break inf_leave;
+                        }
+                        have--;
+                        hold += input[next++] << bits;
+                        bits += 8;
+                    }
+                    hold >>>= last_bits;
+                    bits -= last_bits;
+                    state.back += last_bits;
+                }
+                hold >>>= here_bits;
+                bits -= here_bits;
+                state.back += here_bits;
+                state.length = here_val;
+                if (here_op === 0) {
+                    state.mode = LIT;
+                    break;
+                }
+                if (here_op & 32) {
+                    state.back = -1;
+                    state.mode = TYPE$1;
+                    break;
+                }
+                if (here_op & 64) {
+                    strm.msg = 'invalid literal/length code';
+                    state.mode = BAD$1;
+                    break;
+                }
+                state.extra = here_op & 15;
+                state.mode = LENEXT;
+            case LENEXT:
+                if (state.extra) {
+                    n = state.extra;
+                    while (bits < n) {
+                        if (have === 0) {
+                            break inf_leave;
+                        }
+                        have--;
+                        hold += input[next++] << bits;
+                        bits += 8;
+                    }
+                    state.length += hold & (1 << state.extra) - 1;
+                    hold >>>= state.extra;
+                    bits -= state.extra;
+                    state.back += state.extra;
+                }
+                state.was = state.length;
+                state.mode = DIST;
+            case DIST:
+                for (;;) {
+                    here = state.distcode[hold & (1 << state.distbits) - 1];
+                    here_bits = here >>> 24;
+                    here_op = here >>> 16 & 255;
+                    here_val = here & 65535;
+                    if (here_bits <= bits) {
+                        break;
+                    }
+                    if (have === 0) {
+                        break inf_leave;
+                    }
+                    have--;
+                    hold += input[next++] << bits;
+                    bits += 8;
+                }
+                if ((here_op & 240) === 0) {
+                    last_bits = here_bits;
+                    last_op = here_op;
+                    last_val = here_val;
+                    for (;;) {
+                        here = state.distcode[last_val + ((hold & (1 << last_bits + last_op) - 1) >> last_bits)];
+                        here_bits = here >>> 24;
+                        here_op = here >>> 16 & 255;
+                        here_val = here & 65535;
+                        if (last_bits + here_bits <= bits) {
+                            break;
+                        }
+                        if (have === 0) {
+                            break inf_leave;
+                        }
+                        have--;
+                        hold += input[next++] << bits;
+                        bits += 8;
+                    }
+                    hold >>>= last_bits;
+                    bits -= last_bits;
+                    state.back += last_bits;
+                }
+                hold >>>= here_bits;
+                bits -= here_bits;
+                state.back += here_bits;
+                if (here_op & 64) {
+                    strm.msg = 'invalid distance code';
+                    state.mode = BAD$1;
+                    break;
+                }
+                state.offset = here_val;
+                state.extra = here_op & 15;
+                state.mode = DISTEXT;
+            case DISTEXT:
+                if (state.extra) {
+                    n = state.extra;
+                    while (bits < n) {
+                        if (have === 0) {
+                            break inf_leave;
+                        }
+                        have--;
+                        hold += input[next++] << bits;
+                        bits += 8;
+                    }
+                    state.offset += hold & (1 << state.extra) - 1;
+                    hold >>>= state.extra;
+                    bits -= state.extra;
+                    state.back += state.extra;
+                }
+                if (state.offset > state.dmax) {
+                    strm.msg = 'invalid distance too far back';
+                    state.mode = BAD$1;
+                    break;
+                }
+                state.mode = MATCH;
+            case MATCH:
+                if (left === 0) {
+                    break inf_leave;
+                }
+                copy = _out - left;
+                if (state.offset > copy) {
+                    copy = state.offset - copy;
+                    if (copy > state.whave) {
+                        if (state.sane) {
+                            strm.msg = 'invalid distance too far back';
+                            state.mode = BAD$1;
+                            break;
+                        }
+                    }
+                    if (copy > state.wnext) {
+                        copy -= state.wnext;
+                        from = state.wsize - copy;
+                    } else {
+                        from = state.wnext - copy;
+                    }
+                    if (copy > state.length) {
+                        copy = state.length;
+                    }
+                    from_source = state.window;
+                } else {
+                    from_source = output;
+                    from = put - state.offset;
+                    copy = state.length;
+                }
+                if (copy > left) {
+                    copy = left;
+                }
+                left -= copy;
+                state.length -= copy;
+                do {
+                    output[put++] = from_source[from++];
+                } while (--copy);
+                if (state.length === 0) {
+                    state.mode = LEN;
+                }
+                break;
+            case LIT:
+                if (left === 0) {
+                    break inf_leave;
+                }
+                output[put++] = state.length;
+                left--;
+                state.mode = LEN;
+                break;
+            case CHECK:
+                if (state.wrap) {
+                    while (bits < 32) {
+                        if (have === 0) {
+                            break inf_leave;
+                        }
+                        have--;
+                        hold |= input[next++] << bits;
+                        bits += 8;
+                    }
+                    _out -= left;
+                    strm.total_out += _out;
+                    state.total += _out;
+                    if (_out) {
+                        strm.adler = state.check = state.flags ? crc32_1(state.check, output, _out, put - _out) : adler32_1(state.check, output, _out, put - _out);
+                    }
+                    _out = left;
+                    if ((state.flags ? hold : zswap32(hold)) !== state.check) {
+                        strm.msg = 'incorrect data check';
+                        state.mode = BAD$1;
+                        break;
+                    }
+                    hold = 0;
+                    bits = 0;
+                }
+                state.mode = LENGTH;
+            case LENGTH:
+                if (state.wrap && state.flags) {
+                    while (bits < 32) {
+                        if (have === 0) {
+                            break inf_leave;
+                        }
+                        have--;
+                        hold += input[next++] << bits;
+                        bits += 8;
+                    }
+                    if (hold !== (state.total & 4294967295)) {
+                        strm.msg = 'incorrect length check';
+                        state.mode = BAD$1;
+                        break;
+                    }
+                    hold = 0;
+                    bits = 0;
+                }
+                state.mode = DONE;
+            case DONE:
+                ret = Z_STREAM_END;
+                break inf_leave;
+            case BAD$1:
+                ret = Z_DATA_ERROR;
+                break inf_leave;
+            case MEM:
+                return Z_MEM_ERROR;
+            case SYNC:
+            default:
+                return Z_STREAM_ERROR;
+            }
+        }
+    strm.next_out = put;
+    strm.avail_out = left;
+    strm.next_in = next;
+    strm.avail_in = have;
+    state.hold = hold;
+    state.bits = bits;
+    if (state.wsize || _out !== strm.avail_out && state.mode < BAD$1 && (state.mode < CHECK || flush !== Z_FINISH)) {
+        if (updatewindow(strm, strm.output, strm.next_out, _out - strm.avail_out)) ;
+    }
+    _in -= strm.avail_in;
+    _out -= strm.avail_out;
+    strm.total_in += _in;
+    strm.total_out += _out;
+    state.total += _out;
+    if (state.wrap && _out) {
+        strm.adler = state.check = state.flags ? crc32_1(state.check, output, _out, strm.next_out - _out) : adler32_1(state.check, output, _out, strm.next_out - _out);
+    }
+    strm.data_type = state.bits + (state.last ? 64 : 0) + (state.mode === TYPE$1 ? 128 : 0) + (state.mode === LEN_ || state.mode === COPY_ ? 256 : 0);
+    if ((_in === 0 && _out === 0 || flush === Z_FINISH) && ret === Z_OK) {
+        ret = Z_BUF_ERROR;
+    }
+    return ret;
+}
+function inflateEnd(strm) {
+    if (!strm || !strm.state) {
+        return Z_STREAM_ERROR;
+    }
+    var state = strm.state;
+    if (state.window) {
+        state.window = null;
+    }
+    strm.state = null;
+    return Z_OK;
+}
+function inflateGetHeader(strm, head) {
+    var state;
+    if (!strm || !strm.state) {
+        return Z_STREAM_ERROR;
+    }
+    state = strm.state;
+    if ((state.wrap & 2) === 0) {
+        return Z_STREAM_ERROR;
+    }
+    state.head = head;
+    head.done = false;
+    return Z_OK;
+}
+function inflateSetDictionary(strm, dictionary) {
+    var dictLength = dictionary.length;
+    var state;
+    var dictid;
+    var ret;
+    if (!strm || !strm.state) {
+        return Z_STREAM_ERROR;
+    }
+    state = strm.state;
+    if (state.wrap !== 0 && state.mode !== DICT) {
+        return Z_STREAM_ERROR;
+    }
+    if (state.mode === DICT) {
+        dictid = 1;
+        dictid = adler32_1(dictid, dictionary, dictLength, 0);
+        if (dictid !== state.check) {
+            return Z_DATA_ERROR;
+        }
+    }
+    ret = updatewindow(strm, dictionary, dictLength, dictLength);
+    if (ret) {
+        state.mode = MEM;
+        return Z_MEM_ERROR;
+    }
+    state.havedict = 1;
+    return Z_OK;
+}
+var inflateReset_1 = inflateReset;
+var inflateReset2_1 = inflateReset2;
+var inflateResetKeep_1 = inflateResetKeep;
+var inflateInit_1 = inflateInit;
+var inflateInit2_1 = inflateInit2;
+var inflate_2 = inflate;
+var inflateEnd_1 = inflateEnd;
+var inflateGetHeader_1 = inflateGetHeader;
+var inflateSetDictionary_1 = inflateSetDictionary;
+var inflateInfo = 'pako inflate (from Nodeca project)';
+
+var inflate_1 = {
+	inflateReset: inflateReset_1,
+	inflateReset2: inflateReset2_1,
+	inflateResetKeep: inflateResetKeep_1,
+	inflateInit: inflateInit_1,
+	inflateInit2: inflateInit2_1,
+	inflate: inflate_2,
+	inflateEnd: inflateEnd_1,
+	inflateGetHeader: inflateGetHeader_1,
+	inflateSetDictionary: inflateSetDictionary_1,
+	inflateInfo: inflateInfo
+};
+
+var STR_APPLY_OK = true;
+var STR_APPLY_UIA_OK = true;
+try {
+    String.fromCharCode.apply(null, [0]);
+} catch (__) {
+    STR_APPLY_OK = false;
+}
+try {
+    String.fromCharCode.apply(null, new Uint8Array(1));
+} catch (__) {
+    STR_APPLY_UIA_OK = false;
+}
+var _utf8len = new common.Buf8(256);
+for (var q = 0; q < 256; q++) {
+    _utf8len[q] = q >= 252 ? 6 : q >= 248 ? 5 : q >= 240 ? 4 : q >= 224 ? 3 : q >= 192 ? 2 : 1;
+}
+_utf8len[254] = _utf8len[254] = 1;
+var string2buf = function (str) {
+    var buf, c, c2, m_pos, i, str_len = str.length, buf_len = 0;
+    for (m_pos = 0; m_pos < str_len; m_pos++) {
+        c = str.charCodeAt(m_pos);
+        if ((c & 64512) === 55296 && m_pos + 1 < str_len) {
+            c2 = str.charCodeAt(m_pos + 1);
+            if ((c2 & 64512) === 56320) {
+                c = 65536 + (c - 55296 << 10) + (c2 - 56320);
+                m_pos++;
+            }
+        }
+        buf_len += c < 128 ? 1 : c < 2048 ? 2 : c < 65536 ? 3 : 4;
+    }
+    buf = new common.Buf8(buf_len);
+    for (i = 0, m_pos = 0; i < buf_len; m_pos++) {
+        c = str.charCodeAt(m_pos);
+        if ((c & 64512) === 55296 && m_pos + 1 < str_len) {
+            c2 = str.charCodeAt(m_pos + 1);
+            if ((c2 & 64512) === 56320) {
+                c = 65536 + (c - 55296 << 10) + (c2 - 56320);
+                m_pos++;
+            }
+        }
+        if (c < 128) {
+            buf[i++] = c;
+        } else if (c < 2048) {
+            buf[i++] = 192 | c >>> 6;
+            buf[i++] = 128 | c & 63;
+        } else if (c < 65536) {
+            buf[i++] = 224 | c >>> 12;
+            buf[i++] = 128 | c >>> 6 & 63;
+            buf[i++] = 128 | c & 63;
+        } else {
+            buf[i++] = 240 | c >>> 18;
+            buf[i++] = 128 | c >>> 12 & 63;
+            buf[i++] = 128 | c >>> 6 & 63;
+            buf[i++] = 128 | c & 63;
+        }
+    }
+    return buf;
+};
+function buf2binstring(buf, len) {
+    if (len < 65534) {
+        if (buf.subarray && STR_APPLY_UIA_OK || !buf.subarray && STR_APPLY_OK) {
+            return String.fromCharCode.apply(null, common.shrinkBuf(buf, len));
+        }
+    }
+    var result = '';
+    for (var i = 0; i < len; i++) {
+        result += String.fromCharCode(buf[i]);
+    }
+    return result;
+}
+var buf2binstring_1 = function (buf) {
+    return buf2binstring(buf, buf.length);
+};
+var binstring2buf = function (str) {
+    var buf = new common.Buf8(str.length);
+    for (var i = 0, len = buf.length; i < len; i++) {
+        buf[i] = str.charCodeAt(i);
+    }
+    return buf;
+};
+var buf2string = function (buf, max) {
+    var i, out, c, c_len;
+    var len = max || buf.length;
+    var utf16buf = new Array(len * 2);
+    for (out = 0, i = 0; i < len;) {
+        c = buf[i++];
+        if (c < 128) {
+            utf16buf[out++] = c;
+            continue;
+        }
+        c_len = _utf8len[c];
+        if (c_len > 4) {
+            utf16buf[out++] = 65533;
+            i += c_len - 1;
+            continue;
+        }
+        c &= c_len === 2 ? 31 : c_len === 3 ? 15 : 7;
+        while (c_len > 1 && i < len) {
+            c = c << 6 | buf[i++] & 63;
+            c_len--;
+        }
+        if (c_len > 1) {
+            utf16buf[out++] = 65533;
+            continue;
+        }
+        if (c < 65536) {
+            utf16buf[out++] = c;
+        } else {
+            c -= 65536;
+            utf16buf[out++] = 55296 | c >> 10 & 1023;
+            utf16buf[out++] = 56320 | c & 1023;
+        }
+    }
+    return buf2binstring(utf16buf, out);
+};
+var utf8border = function (buf, max) {
+    var pos;
+    max = max || buf.length;
+    if (max > buf.length) {
+        max = buf.length;
+    }
+    pos = max - 1;
+    while (pos >= 0 && (buf[pos] & 192) === 128) {
+        pos--;
+    }
+    if (pos < 0) {
+        return max;
+    }
+    if (pos === 0) {
+        return max;
+    }
+    return pos + _utf8len[buf[pos]] > max ? pos : max;
+};
+
+var strings = {
+	string2buf: string2buf,
+	buf2binstring: buf2binstring_1,
+	binstring2buf: binstring2buf,
+	buf2string: buf2string,
+	utf8border: utf8border
+};
+
+var constants = {
+    Z_NO_FLUSH: 0,
+    Z_PARTIAL_FLUSH: 1,
+    Z_SYNC_FLUSH: 2,
+    Z_FULL_FLUSH: 3,
+    Z_FINISH: 4,
+    Z_BLOCK: 5,
+    Z_TREES: 6,
+    Z_OK: 0,
+    Z_STREAM_END: 1,
+    Z_NEED_DICT: 2,
+    Z_ERRNO: -1,
+    Z_STREAM_ERROR: -2,
+    Z_DATA_ERROR: -3,
+    Z_BUF_ERROR: -5,
+    Z_NO_COMPRESSION: 0,
+    Z_BEST_SPEED: 1,
+    Z_BEST_COMPRESSION: 9,
+    Z_DEFAULT_COMPRESSION: -1,
+    Z_FILTERED: 1,
+    Z_HUFFMAN_ONLY: 2,
+    Z_RLE: 3,
+    Z_FIXED: 4,
+    Z_DEFAULT_STRATEGY: 0,
+    Z_BINARY: 0,
+    Z_TEXT: 1,
+    Z_UNKNOWN: 2,
+    Z_DEFLATED: 8
+};
+
+var messages = {
+    2: 'need dictionary',
+    1: 'stream end',
+    0: '',
+    '-1': 'file error',
+    '-2': 'stream error',
+    '-3': 'data error',
+    '-4': 'insufficient memory',
+    '-5': 'buffer error',
+    '-6': 'incompatible version'
+};
+
+function ZStream() {
+    this.input = null;
+    this.next_in = 0;
+    this.avail_in = 0;
+    this.total_in = 0;
+    this.output = null;
+    this.next_out = 0;
+    this.avail_out = 0;
+    this.total_out = 0;
+    this.msg = '';
+    this.state = null;
+    this.data_type = 2;
+    this.adler = 0;
+}
+var zstream = ZStream;
+
+function GZheader() {
+    this.text = 0;
+    this.time = 0;
+    this.xflags = 0;
+    this.os = 0;
+    this.extra = null;
+    this.extra_len = 0;
+    this.name = '';
+    this.comment = '';
+    this.hcrc = 0;
+    this.done = false;
+}
+var gzheader = GZheader;
+
+var toString = Object.prototype.toString;
+function Inflate(options) {
+    if (!(this instanceof Inflate))
+        { return new Inflate(options); }
+    this.options = common.assign({
+        chunkSize: 16384,
+        windowBits: 0,
+        to: ''
+    }, options || {});
+    var opt = this.options;
+    if (opt.raw && opt.windowBits >= 0 && opt.windowBits < 16) {
+        opt.windowBits = -opt.windowBits;
+        if (opt.windowBits === 0) {
+            opt.windowBits = -15;
+        }
+    }
+    if (opt.windowBits >= 0 && opt.windowBits < 16 && !(options && options.windowBits)) {
+        opt.windowBits += 32;
+    }
+    if (opt.windowBits > 15 && opt.windowBits < 48) {
+        if ((opt.windowBits & 15) === 0) {
+            opt.windowBits |= 15;
+        }
+    }
+    this.err = 0;
+    this.msg = '';
+    this.ended = false;
+    this.chunks = [];
+    this.strm = new zstream();
+    this.strm.avail_out = 0;
+    var status = inflate_1.inflateInit2(this.strm, opt.windowBits);
+    if (status !== constants.Z_OK) {
+        throw new Error(messages[status]);
+    }
+    this.header = new gzheader();
+    inflate_1.inflateGetHeader(this.strm, this.header);
+}
+Inflate.prototype.push = function (data, mode) {
+    var this$1 = this;
+
+    var strm = this.strm;
+    var chunkSize = this.options.chunkSize;
+    var dictionary = this.options.dictionary;
+    var status, _mode;
+    var next_out_utf8, tail, utf8str;
+    var dict;
+    var allowBufError = false;
+    if (this.ended) {
+        return false;
+    }
+    _mode = mode === ~~mode ? mode : mode === true ? constants.Z_FINISH : constants.Z_NO_FLUSH;
+    if (typeof data === 'string') {
+        strm.input = strings.binstring2buf(data);
+    } else if (toString.call(data) === '[object ArrayBuffer]') {
+        strm.input = new Uint8Array(data);
+    } else {
+        strm.input = data;
+    }
+    strm.next_in = 0;
+    strm.avail_in = strm.input.length;
+    do {
+        if (strm.avail_out === 0) {
+            strm.output = new common.Buf8(chunkSize);
+            strm.next_out = 0;
+            strm.avail_out = chunkSize;
+        }
+        status = inflate_1.inflate(strm, constants.Z_NO_FLUSH);
+        if (status === constants.Z_NEED_DICT && dictionary) {
+            if (typeof dictionary === 'string') {
+                dict = strings.string2buf(dictionary);
+            } else if (toString.call(dictionary) === '[object ArrayBuffer]') {
+                dict = new Uint8Array(dictionary);
+            } else {
+                dict = dictionary;
+            }
+            status = inflate_1.inflateSetDictionary(this$1.strm, dict);
+        }
+        if (status === constants.Z_BUF_ERROR && allowBufError === true) {
+            status = constants.Z_OK;
+            allowBufError = false;
+        }
+        if (status !== constants.Z_STREAM_END && status !== constants.Z_OK) {
+            this$1.onEnd(status);
+            this$1.ended = true;
+            return false;
+        }
+        if (strm.next_out) {
+            if (strm.avail_out === 0 || status === constants.Z_STREAM_END || strm.avail_in === 0 && (_mode === constants.Z_FINISH || _mode === constants.Z_SYNC_FLUSH)) {
+                if (this$1.options.to === 'string') {
+                    next_out_utf8 = strings.utf8border(strm.output, strm.next_out);
+                    tail = strm.next_out - next_out_utf8;
+                    utf8str = strings.buf2string(strm.output, next_out_utf8);
+                    strm.next_out = tail;
+                    strm.avail_out = chunkSize - tail;
+                    if (tail) {
+                        common.arraySet(strm.output, strm.output, next_out_utf8, tail, 0);
+                    }
+                    this$1.onData(utf8str);
+                } else {
+                    this$1.onData(common.shrinkBuf(strm.output, strm.next_out));
+                }
+            }
+        }
+        if (strm.avail_in === 0 && strm.avail_out === 0) {
+            allowBufError = true;
+        }
+    } while ((strm.avail_in > 0 || strm.avail_out === 0) && status !== constants.Z_STREAM_END);
+    if (status === constants.Z_STREAM_END) {
+        _mode = constants.Z_FINISH;
+    }
+    if (_mode === constants.Z_FINISH) {
+        status = inflate_1.inflateEnd(this.strm);
+        this.onEnd(status);
+        this.ended = true;
+        return status === constants.Z_OK;
+    }
+    if (_mode === constants.Z_SYNC_FLUSH) {
+        this.onEnd(constants.Z_OK);
+        strm.avail_out = 0;
+        return true;
+    }
+    return true;
+};
+Inflate.prototype.onData = function (chunk) {
+    this.chunks.push(chunk);
+};
+Inflate.prototype.onEnd = function (status) {
+    if (status === constants.Z_OK) {
+        if (this.options.to === 'string') {
+            this.result = this.chunks.join('');
+        } else {
+            this.result = common.flattenChunks(this.chunks);
+        }
+    }
+    this.chunks = [];
+    this.err = status;
+    this.msg = this.strm.msg;
+};
+function inflate$1(input, options) {
+    var inflator = new Inflate(options);
+    inflator.push(input, true);
+    if (inflator.err) {
+        throw inflator.msg || messages[inflator.err];
+    }
+    return inflator.result;
+}
+function inflateRaw(input, options) {
+    options = options || {};
+    options.raw = true;
+    return inflate$1(input, options);
+}
+var Inflate_1 = Inflate;
+var inflate_2$1 = inflate$1;
+var inflateRaw_1 = inflateRaw;
+var ungzip = inflate$1;
+
+var inflate_1$1 = {
+	Inflate: Inflate_1,
+	inflate: inflate_2$1,
+	inflateRaw: inflateRaw_1,
+	ungzip: ungzip
+};
+
+var byteLength_1 = byteLength;
+var toByteArray_1 = toByteArray;
+var fromByteArray_1 = fromByteArray;
+var lookup = [];
+var revLookup = [];
+var Arr = typeof Uint8Array !== 'undefined' ? Uint8Array : Array;
+var code = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+for (var i = 0, len = code.length; i < len; ++i) {
+    lookup[i] = code[i];
+    revLookup[code.charCodeAt(i)] = i;
+}
+revLookup['-'.charCodeAt(0)] = 62;
+revLookup['_'.charCodeAt(0)] = 63;
+function getLens(b64) {
+    var len = b64.length;
+    if (len % 4 > 0) {
+        throw new Error('Invalid string. Length must be a multiple of 4');
+    }
+    var validLen = b64.indexOf('=');
+    if (validLen === -1)
+        { validLen = len; }
+    var placeHoldersLen = validLen === len ? 0 : 4 - validLen % 4;
+    return [
+        validLen,
+        placeHoldersLen
+    ];
+}
+function byteLength(b64) {
+    var lens = getLens(b64);
+    var validLen = lens[0];
+    var placeHoldersLen = lens[1];
+    return (validLen + placeHoldersLen) * 3 / 4 - placeHoldersLen;
+}
+function _byteLength(b64, validLen, placeHoldersLen) {
+    return (validLen + placeHoldersLen) * 3 / 4 - placeHoldersLen;
+}
+function toByteArray(b64) {
+    var tmp;
+    var lens = getLens(b64);
+    var validLen = lens[0];
+    var placeHoldersLen = lens[1];
+    var arr = new Arr(_byteLength(b64, validLen, placeHoldersLen));
+    var curByte = 0;
+    var len = placeHoldersLen > 0 ? validLen - 4 : validLen;
+    for (var i = 0; i < len; i += 4) {
+        tmp = revLookup[b64.charCodeAt(i)] << 18 | revLookup[b64.charCodeAt(i + 1)] << 12 | revLookup[b64.charCodeAt(i + 2)] << 6 | revLookup[b64.charCodeAt(i + 3)];
+        arr[curByte++] = tmp >> 16 & 255;
+        arr[curByte++] = tmp >> 8 & 255;
+        arr[curByte++] = tmp & 255;
+    }
+    if (placeHoldersLen === 2) {
+        tmp = revLookup[b64.charCodeAt(i)] << 2 | revLookup[b64.charCodeAt(i + 1)] >> 4;
+        arr[curByte++] = tmp & 255;
+    }
+    if (placeHoldersLen === 1) {
+        tmp = revLookup[b64.charCodeAt(i)] << 10 | revLookup[b64.charCodeAt(i + 1)] << 4 | revLookup[b64.charCodeAt(i + 2)] >> 2;
+        arr[curByte++] = tmp >> 8 & 255;
+        arr[curByte++] = tmp & 255;
+    }
+    return arr;
+}
+function tripletToBase64(num) {
+    return lookup[num >> 18 & 63] + lookup[num >> 12 & 63] + lookup[num >> 6 & 63] + lookup[num & 63];
+}
+function encodeChunk(uint8, start, end) {
+    var tmp;
+    var output = [];
+    for (var i = start; i < end; i += 3) {
+        tmp = (uint8[i] << 16 & 16711680) + (uint8[i + 1] << 8 & 65280) + (uint8[i + 2] & 255);
+        output.push(tripletToBase64(tmp));
+    }
+    return output.join('');
+}
+function fromByteArray(uint8) {
+    var tmp;
+    var len = uint8.length;
+    var extraBytes = len % 3;
+    var parts = [];
+    var maxChunkLength = 16383;
+    for (var i = 0, len2 = len - extraBytes; i < len2; i += maxChunkLength) {
+        parts.push(encodeChunk(uint8, i, i + maxChunkLength > len2 ? len2 : i + maxChunkLength));
+    }
+    if (extraBytes === 1) {
+        tmp = uint8[len - 1];
+        parts.push(lookup[tmp >> 2] + lookup[tmp << 4 & 63] + '==');
+    } else if (extraBytes === 2) {
+        tmp = (uint8[len - 2] << 8) + uint8[len - 1];
+        parts.push(lookup[tmp >> 10] + lookup[tmp >> 4 & 63] + lookup[tmp << 2 & 63] + '=');
+    }
+    return parts.join('');
+}
+
+var base64Js = {
+	byteLength: byteLength_1,
+	toByteArray: toByteArray_1,
+	fromByteArray: fromByteArray_1
+};
+
+var MBTilesSource = (function (VectorTileSource$$1) {
+    function MBTilesSource(id, options, dispatcher, eventedParent) {
+        VectorTileSource$$1.call(this, id, options, dispatcher, eventedParent);
+        this.type = 'mbtiles';
+        this.db = this.openDatabase(options.path);
+    }
+
+    if ( VectorTileSource$$1 ) MBTilesSource.__proto__ = VectorTileSource$$1;
+    MBTilesSource.prototype = Object.create( VectorTileSource$$1 && VectorTileSource$$1.prototype );
+    MBTilesSource.prototype.constructor = MBTilesSource;
+    MBTilesSource.prototype.openDatabase = function openDatabase (dbLocation) {
+        if ('sqlitePlugin' in self) {
+            return new Promise(function (resolve, reject) {
+                try {
+                    window.sqlitePlugin.openDatabase({
+                        name: file,
+                        iosDatabaseLocation: 'Documents'
+                    }, resolve, reject);
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        } else {
+            return Promise.reject(new Error('cordova-sqlite-ext plugin not available. ' + 'Please install the plugin and make sure this code is run after onDeviceReady event'));
+        }
+    };
+    MBTilesSource.prototype.readTile = function readTile (z, x, y, callback) {
+        var query = 'SELECT BASE64(tile_data) AS base64_tile_data FROM tiles WHERE zoom_level=? AND tile_column=? AND tile_row=?';
+        var params = [
+            z,
+            x,
+            y
+        ];
+        this.db.then(function (db) {
+            db.transaction(function (txn) {
+                txn.executeSql(query, params, function (tx, res) {
+                    if (res.rows.length) {
+                        var base64Data = res.rows.item(0).base64_tile_data;
+                        var rawData = inflate_1$1.inflate(base64Js.toByteArray(base64Data));
+                        callback(undefined, base64Js.fromByteArray(rawData));
+                    } else {
+                        callback(new Error('tile ' + params.join(',') + ' not found'));
+                    }
+                });
+            }, function (error) {
+                callback(error);
+            });
+        }).catch(function (err) {
+            callback(err);
+        });
+    };
+    MBTilesSource.prototype.loadTile = function loadTile (tile, callback) {
+        var coord = tile.tileID.canonical;
+        var overscaling = coord.z > this.maxzoom ? Math.pow(2, coord.z - this.maxzoom) : 1;
+        var z = Math.min(coord.z, this.maxzoom || coord.z);
+        var x = coord.x;
+        var y = Math.pow(2, z) - coord.y - 1;
+        this.readTile(z, x, y, dispatch.bind(this));
+        function dispatch(err, base64Data) {
+            if (err) {
+                return callback(err);
+            }
+            if (base64Data == undefined) {
+                return callback(new Error('empty data'));
+            }
+            var params = {
+                request: { url: 'data:application/x-protobuf;base64,' + base64Data },
+                uid: tile.uid,
+                tileID: tile.tileID,
+                zoom: coord.z,
+                tileSize: this.tileSize * overscaling,
+                type: this.type,
+                source: this.id,
+                pixelRatio: window.devicePixelRatio || 1,
+                overscaling: overscaling,
+                showCollisionBoxes: this.map.showCollisionBoxes
+            };
+            if (tile.workerID === undefined || tile.state === 'expired') {
+                tile.workerID = this.dispatcher.send('loadTile', params, done.bind(this));
+            } else if (tile.state === 'loading') {
+                tile.reloadCallback = callback;
+            } else {
+                this.dispatcher.send('reloadTile', params, done.bind(this), tile.workerID);
+            }
+            function done(err, data) {
+                if (tile.aborted)
+                    { return callback(null); }
+                if (err) {
+                    return callback(err);
+                }
+                if (this.map._refreshExpiredTiles && data)
+                    { tile.setExpiryData(data); }
+                tile.loadVectorData(data, this.map.painter);
+                callback(null);
+                if (tile.reloadCallback) {
+                    this.loadTile(tile, tile.reloadCallback);
+                    tile.reloadCallback = null;
+                }
+            }
+        }
+    };
+
+    return MBTilesSource;
+}(VectorTileSource));
+
 var sourceTypes = {
     vector: VectorTileSource,
     raster: RasterTileSource,
@@ -21847,7 +24304,8 @@ var sourceTypes = {
     geojson: GeoJSONSource,
     video: VideoSource,
     image: ImageSource,
-    canvas: CanvasSource
+    canvas: CanvasSource,
+    mbtile: MBTilesSource
 };
 var create = function (id, specification, dispatcher, eventedParent) {
     var source = new sourceTypes[specification.type](id, specification, dispatcher, eventedParent);
@@ -26548,109 +29006,109 @@ var posAttributes = __chunk_1.createLayout([{
         components: 2
     }]);
 
-var preludeFrag = "#ifdef GL_ES\nprecision mediump float;\n#else\n#if !defined(lowp)\n#define lowp\n#endif\n#if !defined(mediump)\n#define mediump\n#endif\n#if !defined(highp)\n#define highp\n#endif\n#endif";
+var preludeFrag = "#ifdef GL_ES\r\nprecision mediump float;\r\n#else\r\n#if !defined(lowp)\r\n#define lowp\r\n#endif\r\n#if !defined(mediump)\r\n#define mediump\r\n#endif\r\n#if !defined(highp)\r\n#define highp\r\n#endif\r\n#endif";
 
-var preludeVert = "#ifdef GL_ES\nprecision highp float;\n#else\n#if !defined(lowp)\n#define lowp\n#endif\n#if !defined(mediump)\n#define mediump\n#endif\n#if !defined(highp)\n#define highp\n#endif\n#endif\nvec2 unpack_float(const float packedValue) {int packedIntValue=int(packedValue);int v0=packedIntValue/256;return vec2(v0,packedIntValue-v0*256);}vec2 unpack_opacity(const float packedOpacity) {int intOpacity=int(packedOpacity)/2;return vec2(float(intOpacity)/127.0,mod(packedOpacity,2.0));}vec4 decode_color(const vec2 encodedColor) {return vec4(unpack_float(encodedColor[0])/255.0,unpack_float(encodedColor[1])/255.0\n);}float unpack_mix_vec2(const vec2 packedValue,const float t) {return mix(packedValue[0],packedValue[1],t);}vec4 unpack_mix_color(const vec4 packedColors,const float t) {vec4 minColor=decode_color(vec2(packedColors[0],packedColors[1]));vec4 maxColor=decode_color(vec2(packedColors[2],packedColors[3]));return mix(minColor,maxColor,t);}vec2 get_pattern_pos(const vec2 pixel_coord_upper,const vec2 pixel_coord_lower,const vec2 pattern_size,const float tile_units_to_pixels,const vec2 pos) {vec2 offset=mod(mod(mod(pixel_coord_upper,pattern_size)*256.0,pattern_size)*256.0+pixel_coord_lower,pattern_size);return (tile_units_to_pixels*pos+offset)/pattern_size;}";
+var preludeVert = "#ifdef GL_ES\r\nprecision highp float;\r\n#else\r\n#if !defined(lowp)\r\n#define lowp\r\n#endif\r\n#if !defined(mediump)\r\n#define mediump\r\n#endif\r\n#if !defined(highp)\r\n#define highp\r\n#endif\r\n#endif\nvec2 unpack_float(const float packedValue) {\r\nint packedIntValue=int(packedValue);\r\nint v0=packedIntValue/256;\r\nreturn vec2(v0,packedIntValue-v0*256);\r\n}\r\nvec2 unpack_opacity(const float packedOpacity) {\r\nint intOpacity=int(packedOpacity)/2;\r\nreturn vec2(float(intOpacity)/127.0,mod(packedOpacity,2.0));\r\n}vec4 decode_color(const vec2 encodedColor) {\r\nreturn vec4(\r\nunpack_float(encodedColor[0])/255.0,unpack_float(encodedColor[1])/255.0\r\n);\r\n}float unpack_mix_vec2(const vec2 packedValue,const float t) {\r\nreturn mix(packedValue[0],packedValue[1],t);\r\n}vec4 unpack_mix_color(const vec4 packedColors,const float t) {\r\nvec4 minColor=decode_color(vec2(packedColors[0],packedColors[1]));\r\nvec4 maxColor=decode_color(vec2(packedColors[2],packedColors[3]));\r\nreturn mix(minColor,maxColor,t);\r\n}vec2 get_pattern_pos(const vec2 pixel_coord_upper,const vec2 pixel_coord_lower,const vec2 pattern_size,const float tile_units_to_pixels,const vec2 pos) {\r\nvec2 offset=mod(mod(mod(pixel_coord_upper,pattern_size)*256.0,pattern_size)*256.0+pixel_coord_lower,pattern_size);\r\nreturn (tile_units_to_pixels*pos+offset)/pattern_size;\r\n}";
 
-var backgroundFrag = "uniform vec4 u_color;uniform float u_opacity;void main() {gl_FragColor=u_color*u_opacity;\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var backgroundFrag = "uniform vec4 u_color;\r\nuniform float u_opacity;\r\nvoid main() {\r\ngl_FragColor=u_color*u_opacity;\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var backgroundVert = "attribute vec2 a_pos;uniform mat4 u_matrix;void main() {gl_Position=u_matrix*vec4(a_pos,0,1);}";
+var backgroundVert = "attribute vec2 a_pos;\r\nuniform mat4 u_matrix;\r\nvoid main() {\r\ngl_Position=u_matrix*vec4(a_pos,0,1);\r\n}";
 
-var backgroundPatternFrag = "uniform vec2 u_pattern_tl_a;uniform vec2 u_pattern_br_a;uniform vec2 u_pattern_tl_b;uniform vec2 u_pattern_br_b;uniform vec2 u_texsize;uniform float u_mix;uniform float u_opacity;uniform sampler2D u_image;varying vec2 v_pos_a;varying vec2 v_pos_b;void main() {vec2 imagecoord=mod(v_pos_a,1.0);vec2 pos=mix(u_pattern_tl_a/u_texsize,u_pattern_br_a/u_texsize,imagecoord);vec4 color1=texture2D(u_image,pos);vec2 imagecoord_b=mod(v_pos_b,1.0);vec2 pos2=mix(u_pattern_tl_b/u_texsize,u_pattern_br_b/u_texsize,imagecoord_b);vec4 color2=texture2D(u_image,pos2);gl_FragColor=mix(color1,color2,u_mix)*u_opacity;\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var backgroundPatternFrag = "uniform vec2 u_pattern_tl_a;\r\nuniform vec2 u_pattern_br_a;\r\nuniform vec2 u_pattern_tl_b;\r\nuniform vec2 u_pattern_br_b;\r\nuniform vec2 u_texsize;\r\nuniform float u_mix;\r\nuniform float u_opacity;\r\nuniform sampler2D u_image;\r\nvarying vec2 v_pos_a;\r\nvarying vec2 v_pos_b;\r\nvoid main() {\r\nvec2 imagecoord=mod(v_pos_a,1.0);\r\nvec2 pos=mix(u_pattern_tl_a/u_texsize,u_pattern_br_a/u_texsize,imagecoord);\r\nvec4 color1=texture2D(u_image,pos);\r\nvec2 imagecoord_b=mod(v_pos_b,1.0);\r\nvec2 pos2=mix(u_pattern_tl_b/u_texsize,u_pattern_br_b/u_texsize,imagecoord_b);\r\nvec4 color2=texture2D(u_image,pos2);\r\ngl_FragColor=mix(color1,color2,u_mix)*u_opacity;\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var backgroundPatternVert = "uniform mat4 u_matrix;uniform vec2 u_pattern_size_a;uniform vec2 u_pattern_size_b;uniform vec2 u_pixel_coord_upper;uniform vec2 u_pixel_coord_lower;uniform float u_scale_a;uniform float u_scale_b;uniform float u_tile_units_to_pixels;attribute vec2 a_pos;varying vec2 v_pos_a;varying vec2 v_pos_b;void main() {gl_Position=u_matrix*vec4(a_pos,0,1);v_pos_a=get_pattern_pos(u_pixel_coord_upper,u_pixel_coord_lower,u_scale_a*u_pattern_size_a,u_tile_units_to_pixels,a_pos);v_pos_b=get_pattern_pos(u_pixel_coord_upper,u_pixel_coord_lower,u_scale_b*u_pattern_size_b,u_tile_units_to_pixels,a_pos);}";
+var backgroundPatternVert = "uniform mat4 u_matrix;\r\nuniform vec2 u_pattern_size_a;\r\nuniform vec2 u_pattern_size_b;\r\nuniform vec2 u_pixel_coord_upper;\r\nuniform vec2 u_pixel_coord_lower;\r\nuniform float u_scale_a;\r\nuniform float u_scale_b;\r\nuniform float u_tile_units_to_pixels;\r\nattribute vec2 a_pos;\r\nvarying vec2 v_pos_a;\r\nvarying vec2 v_pos_b;\r\nvoid main() {\r\ngl_Position=u_matrix*vec4(a_pos,0,1);\r\nv_pos_a=get_pattern_pos(u_pixel_coord_upper,u_pixel_coord_lower,u_scale_a*u_pattern_size_a,u_tile_units_to_pixels,a_pos);\r\nv_pos_b=get_pattern_pos(u_pixel_coord_upper,u_pixel_coord_lower,u_scale_b*u_pattern_size_b,u_tile_units_to_pixels,a_pos);\r\n}";
 
-var circleFrag = "#pragma mapbox: define highp vec4 color\n#pragma mapbox: define mediump float radius\n#pragma mapbox: define lowp float blur\n#pragma mapbox: define lowp float opacity\n#pragma mapbox: define highp vec4 stroke_color\n#pragma mapbox: define mediump float stroke_width\n#pragma mapbox: define lowp float stroke_opacity\nvarying vec3 v_data;void main() {\n#pragma mapbox: initialize highp vec4 color\n#pragma mapbox: initialize mediump float radius\n#pragma mapbox: initialize lowp float blur\n#pragma mapbox: initialize lowp float opacity\n#pragma mapbox: initialize highp vec4 stroke_color\n#pragma mapbox: initialize mediump float stroke_width\n#pragma mapbox: initialize lowp float stroke_opacity\nvec2 extrude=v_data.xy;float extrude_length=length(extrude);lowp float antialiasblur=v_data.z;float antialiased_blur=-max(blur,antialiasblur);float opacity_t=smoothstep(0.0,antialiased_blur,extrude_length-1.0);float color_t=stroke_width < 0.01 ? 0.0 : smoothstep(antialiased_blur,0.0,extrude_length-radius/(radius+stroke_width));gl_FragColor=opacity_t*mix(color*opacity,stroke_color*stroke_opacity,color_t);\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var circleFrag = "#pragma mapbox: define highp vec4 color\r\n#pragma mapbox: define mediump float radius\r\n#pragma mapbox: define lowp float blur\r\n#pragma mapbox: define lowp float opacity\r\n#pragma mapbox: define highp vec4 stroke_color\r\n#pragma mapbox: define mediump float stroke_width\r\n#pragma mapbox: define lowp float stroke_opacity\r\nvarying vec3 v_data;\r\nvoid main() {\r\n#pragma mapbox: initialize highp vec4 color\r\n#pragma mapbox: initialize mediump float radius\r\n#pragma mapbox: initialize lowp float blur\r\n#pragma mapbox: initialize lowp float opacity\r\n#pragma mapbox: initialize highp vec4 stroke_color\r\n#pragma mapbox: initialize mediump float stroke_width\r\n#pragma mapbox: initialize lowp float stroke_opacity\r\nvec2 extrude=v_data.xy;\r\nfloat extrude_length=length(extrude);\r\nlowp float antialiasblur=v_data.z;\r\nfloat antialiased_blur=-max(blur,antialiasblur);\r\nfloat opacity_t=smoothstep(0.0,antialiased_blur,extrude_length-1.0);\r\nfloat color_t=stroke_width < 0.01 ? 0.0 : smoothstep(\r\nantialiased_blur,0.0,extrude_length-radius/(radius+stroke_width)\r\n);\r\ngl_FragColor=opacity_t*mix(color*opacity,stroke_color*stroke_opacity,color_t);\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var circleVert = "uniform mat4 u_matrix;uniform bool u_scale_with_map;uniform bool u_pitch_with_map;uniform vec2 u_extrude_scale;uniform highp float u_camera_to_center_distance;attribute vec2 a_pos;\n#pragma mapbox: define highp vec4 color\n#pragma mapbox: define mediump float radius\n#pragma mapbox: define lowp float blur\n#pragma mapbox: define lowp float opacity\n#pragma mapbox: define highp vec4 stroke_color\n#pragma mapbox: define mediump float stroke_width\n#pragma mapbox: define lowp float stroke_opacity\nvarying vec3 v_data;void main(void) {\n#pragma mapbox: initialize highp vec4 color\n#pragma mapbox: initialize mediump float radius\n#pragma mapbox: initialize lowp float blur\n#pragma mapbox: initialize lowp float opacity\n#pragma mapbox: initialize highp vec4 stroke_color\n#pragma mapbox: initialize mediump float stroke_width\n#pragma mapbox: initialize lowp float stroke_opacity\nvec2 extrude=vec2(mod(a_pos,2.0)*2.0-1.0);vec2 circle_center=floor(a_pos*0.5);if (u_pitch_with_map) {vec2 corner_position=circle_center;if (u_scale_with_map) {corner_position+=extrude*(radius+stroke_width)*u_extrude_scale;} else {vec4 projected_center=u_matrix*vec4(circle_center,0,1);corner_position+=extrude*(radius+stroke_width)*u_extrude_scale*(projected_center.w/u_camera_to_center_distance);}gl_Position=u_matrix*vec4(corner_position,0,1);} else {gl_Position=u_matrix*vec4(circle_center,0,1);if (u_scale_with_map) {gl_Position.xy+=extrude*(radius+stroke_width)*u_extrude_scale*u_camera_to_center_distance;} else {gl_Position.xy+=extrude*(radius+stroke_width)*u_extrude_scale*gl_Position.w;}}lowp float antialiasblur=1.0/DEVICE_PIXEL_RATIO/(radius+stroke_width);v_data=vec3(extrude.x,extrude.y,antialiasblur);}";
+var circleVert = "uniform mat4 u_matrix;\r\nuniform bool u_scale_with_map;\r\nuniform bool u_pitch_with_map;\r\nuniform vec2 u_extrude_scale;\r\nuniform highp float u_camera_to_center_distance;\r\nattribute vec2 a_pos;\r\n#pragma mapbox: define highp vec4 color\r\n#pragma mapbox: define mediump float radius\r\n#pragma mapbox: define lowp float blur\r\n#pragma mapbox: define lowp float opacity\r\n#pragma mapbox: define highp vec4 stroke_color\r\n#pragma mapbox: define mediump float stroke_width\r\n#pragma mapbox: define lowp float stroke_opacity\r\nvarying vec3 v_data;\r\nvoid main(void) {\r\n#pragma mapbox: initialize highp vec4 color\r\n#pragma mapbox: initialize mediump float radius\r\n#pragma mapbox: initialize lowp float blur\r\n#pragma mapbox: initialize lowp float opacity\r\n#pragma mapbox: initialize highp vec4 stroke_color\r\n#pragma mapbox: initialize mediump float stroke_width\r\n#pragma mapbox: initialize lowp float stroke_opacity\nvec2 extrude=vec2(mod(a_pos,2.0)*2.0-1.0);vec2 circle_center=floor(a_pos*0.5);\r\nif (u_pitch_with_map) {\r\nvec2 corner_position=circle_center;\r\nif (u_scale_with_map) {\r\ncorner_position+=extrude*(radius+stroke_width)*u_extrude_scale;\r\n} else {vec4 projected_center=u_matrix*vec4(circle_center,0,1);\r\ncorner_position+=extrude*(radius+stroke_width)*u_extrude_scale*(projected_center.w/u_camera_to_center_distance);\r\n}\r\ngl_Position=u_matrix*vec4(corner_position,0,1);\r\n} else {\r\ngl_Position=u_matrix*vec4(circle_center,0,1);\r\nif (u_scale_with_map) {\r\ngl_Position.xy+=extrude*(radius+stroke_width)*u_extrude_scale*u_camera_to_center_distance;\r\n} else {\r\ngl_Position.xy+=extrude*(radius+stroke_width)*u_extrude_scale*gl_Position.w;\r\n}\r\n}lowp float antialiasblur=1.0/DEVICE_PIXEL_RATIO/(radius+stroke_width);\r\nv_data=vec3(extrude.x,extrude.y,antialiasblur);\r\n}";
 
-var clippingMaskFrag = "void main() {gl_FragColor=vec4(1.0);}";
+var clippingMaskFrag = "void main() {\r\ngl_FragColor=vec4(1.0);\r\n}";
 
-var clippingMaskVert = "attribute vec2 a_pos;uniform mat4 u_matrix;void main() {gl_Position=u_matrix*vec4(a_pos,0,1);}";
+var clippingMaskVert = "attribute vec2 a_pos;\r\nuniform mat4 u_matrix;\r\nvoid main() {\r\ngl_Position=u_matrix*vec4(a_pos,0,1);\r\n}";
 
-var heatmapFrag = "#pragma mapbox: define highp float weight\nuniform highp float u_intensity;varying vec2 v_extrude;\n#define GAUSS_COEF 0.3989422804014327\nvoid main() {\n#pragma mapbox: initialize highp float weight\nfloat d=-0.5*3.0*3.0*dot(v_extrude,v_extrude);float val=weight*u_intensity*GAUSS_COEF*exp(d);gl_FragColor=vec4(val,1.0,1.0,1.0);\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var heatmapFrag = "#pragma mapbox: define highp float weight\r\nuniform highp float u_intensity;\r\nvarying vec2 v_extrude;\n#define GAUSS_COEF 0.3989422804014327\r\nvoid main() {\r\n#pragma mapbox: initialize highp float weight\nfloat d=-0.5*3.0*3.0*dot(v_extrude,v_extrude);\r\nfloat val=weight*u_intensity*GAUSS_COEF*exp(d);\r\ngl_FragColor=vec4(val,1.0,1.0,1.0);\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var heatmapVert = "#pragma mapbox: define highp float weight\n#pragma mapbox: define mediump float radius\nuniform mat4 u_matrix;uniform float u_extrude_scale;uniform float u_opacity;uniform float u_intensity;attribute vec2 a_pos;varying vec2 v_extrude;const highp float ZERO=1.0/255.0/16.0;\n#define GAUSS_COEF 0.3989422804014327\nvoid main(void) {\n#pragma mapbox: initialize highp float weight\n#pragma mapbox: initialize mediump float radius\nvec2 unscaled_extrude=vec2(mod(a_pos,2.0)*2.0-1.0);float S=sqrt(-2.0*log(ZERO/weight/u_intensity/GAUSS_COEF))/3.0;v_extrude=S*unscaled_extrude;vec2 extrude=v_extrude*radius*u_extrude_scale;vec4 pos=vec4(floor(a_pos*0.5)+extrude,0,1);gl_Position=u_matrix*pos;}";
+var heatmapVert = "#pragma mapbox: define highp float weight\r\n#pragma mapbox: define mediump float radius\r\nuniform mat4 u_matrix;\r\nuniform float u_extrude_scale;\r\nuniform float u_opacity;\r\nuniform float u_intensity;\r\nattribute vec2 a_pos;\r\nvarying vec2 v_extrude;const highp float ZERO=1.0/255.0/16.0;\n#define GAUSS_COEF 0.3989422804014327\r\nvoid main(void) {\r\n#pragma mapbox: initialize highp float weight\r\n#pragma mapbox: initialize mediump float radius\nvec2 unscaled_extrude=vec2(mod(a_pos,2.0)*2.0-1.0);float S=sqrt(-2.0*log(ZERO/weight/u_intensity/GAUSS_COEF))/3.0;v_extrude=S*unscaled_extrude;vec2 extrude=v_extrude*radius*u_extrude_scale;vec4 pos=vec4(floor(a_pos*0.5)+extrude,0,1);\r\ngl_Position=u_matrix*pos;\r\n}";
 
-var heatmapTextureFrag = "uniform sampler2D u_image;uniform sampler2D u_color_ramp;uniform float u_opacity;varying vec2 v_pos;void main() {float t=texture2D(u_image,v_pos).r;vec4 color=texture2D(u_color_ramp,vec2(t,0.5));gl_FragColor=color*u_opacity;\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(0.0);\n#endif\n}";
+var heatmapTextureFrag = "uniform sampler2D u_image;\r\nuniform sampler2D u_color_ramp;\r\nuniform float u_opacity;\r\nvarying vec2 v_pos;\r\nvoid main() {\r\nfloat t=texture2D(u_image,v_pos).r;\r\nvec4 color=texture2D(u_color_ramp,vec2(t,0.5));\r\ngl_FragColor=color*u_opacity;\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(0.0);\r\n#endif\r\n}";
 
-var heatmapTextureVert = "uniform mat4 u_matrix;uniform vec2 u_world;attribute vec2 a_pos;varying vec2 v_pos;void main() {gl_Position=u_matrix*vec4(a_pos*u_world,0,1);v_pos.x=a_pos.x;v_pos.y=1.0-a_pos.y;}";
+var heatmapTextureVert = "uniform mat4 u_matrix;\r\nuniform vec2 u_world;\r\nattribute vec2 a_pos;\r\nvarying vec2 v_pos;\r\nvoid main() {\r\ngl_Position=u_matrix*vec4(a_pos*u_world,0,1);\r\nv_pos.x=a_pos.x;\r\nv_pos.y=1.0-a_pos.y;\r\n}";
 
-var collisionBoxFrag = "varying float v_placed;varying float v_notUsed;void main() {float alpha=0.5;gl_FragColor=vec4(1.0,0.0,0.0,1.0)*alpha;if (v_placed > 0.5) {gl_FragColor=vec4(0.0,0.0,1.0,0.5)*alpha;}if (v_notUsed > 0.5) {gl_FragColor*=.1;}}";
+var collisionBoxFrag = "varying float v_placed;\r\nvarying float v_notUsed;\r\nvoid main() {\r\nfloat alpha=0.5;gl_FragColor=vec4(1.0,0.0,0.0,1.0)*alpha;if (v_placed > 0.5) {\r\ngl_FragColor=vec4(0.0,0.0,1.0,0.5)*alpha;\r\n}\r\nif (v_notUsed > 0.5) {gl_FragColor*=.1;\r\n}\r\n}";
 
-var collisionBoxVert = "attribute vec2 a_pos;attribute vec2 a_anchor_pos;attribute vec2 a_extrude;attribute vec2 a_placed;uniform mat4 u_matrix;uniform vec2 u_extrude_scale;uniform float u_camera_to_center_distance;varying float v_placed;varying float v_notUsed;void main() {vec4 projectedPoint=u_matrix*vec4(a_anchor_pos,0,1);highp float camera_to_anchor_distance=projectedPoint.w;highp float collision_perspective_ratio=clamp(0.5+0.5*(u_camera_to_center_distance/camera_to_anchor_distance),0.0,4.0);gl_Position=u_matrix*vec4(a_pos,0.0,1.0);gl_Position.xy+=a_extrude*u_extrude_scale*gl_Position.w*collision_perspective_ratio;v_placed=a_placed.x;v_notUsed=a_placed.y;}";
+var collisionBoxVert = "attribute vec2 a_pos;\r\nattribute vec2 a_anchor_pos;\r\nattribute vec2 a_extrude;\r\nattribute vec2 a_placed;\r\nuniform mat4 u_matrix;\r\nuniform vec2 u_extrude_scale;\r\nuniform float u_camera_to_center_distance;\r\nvarying float v_placed;\r\nvarying float v_notUsed;\r\nvoid main() {\r\nvec4 projectedPoint=u_matrix*vec4(a_anchor_pos,0,1);\r\nhighp float camera_to_anchor_distance=projectedPoint.w;\r\nhighp float collision_perspective_ratio=clamp(\r\n0.5+0.5*(u_camera_to_center_distance/camera_to_anchor_distance),0.0,4.0);\r\ngl_Position=u_matrix*vec4(a_pos,0.0,1.0);\r\ngl_Position.xy+=a_extrude*u_extrude_scale*gl_Position.w*collision_perspective_ratio;\r\nv_placed=a_placed.x;\r\nv_notUsed=a_placed.y;\r\n}";
 
-var collisionCircleFrag = "uniform float u_overscale_factor;varying float v_placed;varying float v_notUsed;varying float v_radius;varying vec2 v_extrude;varying vec2 v_extrude_scale;void main() {float alpha=0.5;vec4 color=vec4(1.0,0.0,0.0,1.0)*alpha;if (v_placed > 0.5) {color=vec4(0.0,0.0,1.0,0.5)*alpha;}if (v_notUsed > 0.5) {color*=.2;}float extrude_scale_length=length(v_extrude_scale);float extrude_length=length(v_extrude)*extrude_scale_length;float stroke_width=15.0*extrude_scale_length/u_overscale_factor;float radius=v_radius*extrude_scale_length;float distance_to_edge=abs(extrude_length-radius);float opacity_t=smoothstep(-stroke_width,0.0,-distance_to_edge);gl_FragColor=opacity_t*color;}";
+var collisionCircleFrag = "uniform float u_overscale_factor;\r\nvarying float v_placed;\r\nvarying float v_notUsed;\r\nvarying float v_radius;\r\nvarying vec2 v_extrude;\r\nvarying vec2 v_extrude_scale;\r\nvoid main() {\r\nfloat alpha=0.5;vec4 color=vec4(1.0,0.0,0.0,1.0)*alpha;if (v_placed > 0.5) {\r\ncolor=vec4(0.0,0.0,1.0,0.5)*alpha;\r\n}\r\nif (v_notUsed > 0.5) {color*=.2;\r\n}\r\nfloat extrude_scale_length=length(v_extrude_scale);\r\nfloat extrude_length=length(v_extrude)*extrude_scale_length;\r\nfloat stroke_width=15.0*extrude_scale_length/u_overscale_factor;\r\nfloat radius=v_radius*extrude_scale_length;\r\nfloat distance_to_edge=abs(extrude_length-radius);\r\nfloat opacity_t=smoothstep(-stroke_width,0.0,-distance_to_edge);\r\ngl_FragColor=opacity_t*color;\r\n}";
 
-var collisionCircleVert = "attribute vec2 a_pos;attribute vec2 a_anchor_pos;attribute vec2 a_extrude;attribute vec2 a_placed;uniform mat4 u_matrix;uniform vec2 u_extrude_scale;uniform float u_camera_to_center_distance;varying float v_placed;varying float v_notUsed;varying float v_radius;varying vec2 v_extrude;varying vec2 v_extrude_scale;void main() {vec4 projectedPoint=u_matrix*vec4(a_anchor_pos,0,1);highp float camera_to_anchor_distance=projectedPoint.w;highp float collision_perspective_ratio=clamp(0.5+0.5*(u_camera_to_center_distance/camera_to_anchor_distance),0.0,4.0);gl_Position=u_matrix*vec4(a_pos,0.0,1.0);highp float padding_factor=1.2;gl_Position.xy+=a_extrude*u_extrude_scale*padding_factor*gl_Position.w*collision_perspective_ratio;v_placed=a_placed.x;v_notUsed=a_placed.y;v_radius=abs(a_extrude.y);v_extrude=a_extrude*padding_factor;v_extrude_scale=u_extrude_scale*u_camera_to_center_distance*collision_perspective_ratio;}";
+var collisionCircleVert = "attribute vec2 a_pos;\r\nattribute vec2 a_anchor_pos;\r\nattribute vec2 a_extrude;\r\nattribute vec2 a_placed;\r\nuniform mat4 u_matrix;\r\nuniform vec2 u_extrude_scale;\r\nuniform float u_camera_to_center_distance;\r\nvarying float v_placed;\r\nvarying float v_notUsed;\r\nvarying float v_radius;\r\nvarying vec2 v_extrude;\r\nvarying vec2 v_extrude_scale;\r\nvoid main() {\r\nvec4 projectedPoint=u_matrix*vec4(a_anchor_pos,0,1);\r\nhighp float camera_to_anchor_distance=projectedPoint.w;\r\nhighp float collision_perspective_ratio=clamp(\r\n0.5+0.5*(u_camera_to_center_distance/camera_to_anchor_distance),0.0,4.0);\r\ngl_Position=u_matrix*vec4(a_pos,0.0,1.0);\r\nhighp float padding_factor=1.2;gl_Position.xy+=a_extrude*u_extrude_scale*padding_factor*gl_Position.w*collision_perspective_ratio;\r\nv_placed=a_placed.x;\r\nv_notUsed=a_placed.y;\r\nv_radius=abs(a_extrude.y);v_extrude=a_extrude*padding_factor;\r\nv_extrude_scale=u_extrude_scale*u_camera_to_center_distance*collision_perspective_ratio;\r\n}";
 
-var debugFrag = "uniform highp vec4 u_color;void main() {gl_FragColor=u_color;}";
+var debugFrag = "uniform highp vec4 u_color;\r\nvoid main() {\r\ngl_FragColor=u_color;\r\n}";
 
-var debugVert = "attribute vec2 a_pos;uniform mat4 u_matrix;void main() {gl_Position=u_matrix*vec4(a_pos,0,1);}";
+var debugVert = "attribute vec2 a_pos;\r\nuniform mat4 u_matrix;\r\nvoid main() {\r\ngl_Position=u_matrix*vec4(a_pos,0,1);\r\n}";
 
-var fillFrag = "#pragma mapbox: define highp vec4 color\n#pragma mapbox: define lowp float opacity\nvoid main() {\n#pragma mapbox: initialize highp vec4 color\n#pragma mapbox: initialize lowp float opacity\ngl_FragColor=color*opacity;\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var fillFrag = "#pragma mapbox: define highp vec4 color\r\n#pragma mapbox: define lowp float opacity\r\nvoid main() {\r\n#pragma mapbox: initialize highp vec4 color\r\n#pragma mapbox: initialize lowp float opacity\r\ngl_FragColor=color*opacity;\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var fillVert = "attribute vec2 a_pos;uniform mat4 u_matrix;\n#pragma mapbox: define highp vec4 color\n#pragma mapbox: define lowp float opacity\nvoid main() {\n#pragma mapbox: initialize highp vec4 color\n#pragma mapbox: initialize lowp float opacity\ngl_Position=u_matrix*vec4(a_pos,0,1);}";
+var fillVert = "attribute vec2 a_pos;\r\nuniform mat4 u_matrix;\r\n#pragma mapbox: define highp vec4 color\r\n#pragma mapbox: define lowp float opacity\r\nvoid main() {\r\n#pragma mapbox: initialize highp vec4 color\r\n#pragma mapbox: initialize lowp float opacity\r\ngl_Position=u_matrix*vec4(a_pos,0,1);\r\n}";
 
-var fillOutlineFrag = "#pragma mapbox: define highp vec4 outline_color\n#pragma mapbox: define lowp float opacity\nvarying vec2 v_pos;void main() {\n#pragma mapbox: initialize highp vec4 outline_color\n#pragma mapbox: initialize lowp float opacity\nfloat dist=length(v_pos-gl_FragCoord.xy);float alpha=1.0-smoothstep(0.0,1.0,dist);gl_FragColor=outline_color*(alpha*opacity);\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var fillOutlineFrag = "#pragma mapbox: define highp vec4 outline_color\r\n#pragma mapbox: define lowp float opacity\r\nvarying vec2 v_pos;\r\nvoid main() {\r\n#pragma mapbox: initialize highp vec4 outline_color\r\n#pragma mapbox: initialize lowp float opacity\r\nfloat dist=length(v_pos-gl_FragCoord.xy);\r\nfloat alpha=1.0-smoothstep(0.0,1.0,dist);\r\ngl_FragColor=outline_color*(alpha*opacity);\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var fillOutlineVert = "attribute vec2 a_pos;uniform mat4 u_matrix;uniform vec2 u_world;varying vec2 v_pos;\n#pragma mapbox: define highp vec4 outline_color\n#pragma mapbox: define lowp float opacity\nvoid main() {\n#pragma mapbox: initialize highp vec4 outline_color\n#pragma mapbox: initialize lowp float opacity\ngl_Position=u_matrix*vec4(a_pos,0,1);v_pos=(gl_Position.xy/gl_Position.w+1.0)/2.0*u_world;}";
+var fillOutlineVert = "attribute vec2 a_pos;\r\nuniform mat4 u_matrix;\r\nuniform vec2 u_world;\r\nvarying vec2 v_pos;\r\n#pragma mapbox: define highp vec4 outline_color\r\n#pragma mapbox: define lowp float opacity\r\nvoid main() {\r\n#pragma mapbox: initialize highp vec4 outline_color\r\n#pragma mapbox: initialize lowp float opacity\r\ngl_Position=u_matrix*vec4(a_pos,0,1);\r\nv_pos=(gl_Position.xy/gl_Position.w+1.0)/2.0*u_world;\r\n}";
 
-var fillOutlinePatternFrag = "uniform vec2 u_texsize;uniform sampler2D u_image;uniform float u_fade;varying vec2 v_pos_a;varying vec2 v_pos_b;varying vec2 v_pos;\n#pragma mapbox: define lowp float opacity\n#pragma mapbox: define lowp vec4 pattern_from\n#pragma mapbox: define lowp vec4 pattern_to\nvoid main() {\n#pragma mapbox: initialize lowp float opacity\n#pragma mapbox: initialize mediump vec4 pattern_from\n#pragma mapbox: initialize mediump vec4 pattern_to\nvec2 pattern_tl_a=pattern_from.xy;vec2 pattern_br_a=pattern_from.zw;vec2 pattern_tl_b=pattern_to.xy;vec2 pattern_br_b=pattern_to.zw;vec2 imagecoord=mod(v_pos_a,1.0);vec2 pos=mix(pattern_tl_a/u_texsize,pattern_br_a/u_texsize,imagecoord);vec4 color1=texture2D(u_image,pos);vec2 imagecoord_b=mod(v_pos_b,1.0);vec2 pos2=mix(pattern_tl_b/u_texsize,pattern_br_b/u_texsize,imagecoord_b);vec4 color2=texture2D(u_image,pos2);float dist=length(v_pos-gl_FragCoord.xy);float alpha=1.0-smoothstep(0.0,1.0,dist);gl_FragColor=mix(color1,color2,u_fade)*alpha*opacity;\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var fillOutlinePatternFrag = "uniform vec2 u_texsize;\r\nuniform sampler2D u_image;\r\nuniform float u_fade;\r\nvarying vec2 v_pos_a;\r\nvarying vec2 v_pos_b;\r\nvarying vec2 v_pos;\r\n#pragma mapbox: define lowp float opacity\r\n#pragma mapbox: define lowp vec4 pattern_from\r\n#pragma mapbox: define lowp vec4 pattern_to\r\nvoid main() {\r\n#pragma mapbox: initialize lowp float opacity\r\n#pragma mapbox: initialize mediump vec4 pattern_from\r\n#pragma mapbox: initialize mediump vec4 pattern_to\r\nvec2 pattern_tl_a=pattern_from.xy;\r\nvec2 pattern_br_a=pattern_from.zw;\r\nvec2 pattern_tl_b=pattern_to.xy;\r\nvec2 pattern_br_b=pattern_to.zw;\r\nvec2 imagecoord=mod(v_pos_a,1.0);\r\nvec2 pos=mix(pattern_tl_a/u_texsize,pattern_br_a/u_texsize,imagecoord);\r\nvec4 color1=texture2D(u_image,pos);\r\nvec2 imagecoord_b=mod(v_pos_b,1.0);\r\nvec2 pos2=mix(pattern_tl_b/u_texsize,pattern_br_b/u_texsize,imagecoord_b);\r\nvec4 color2=texture2D(u_image,pos2);float dist=length(v_pos-gl_FragCoord.xy);\r\nfloat alpha=1.0-smoothstep(0.0,1.0,dist);\r\ngl_FragColor=mix(color1,color2,u_fade)*alpha*opacity;\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var fillOutlinePatternVert = "uniform mat4 u_matrix;uniform vec2 u_world;uniform vec2 u_pixel_coord_upper;uniform vec2 u_pixel_coord_lower;uniform vec4 u_scale;attribute vec2 a_pos;varying vec2 v_pos_a;varying vec2 v_pos_b;varying vec2 v_pos;\n#pragma mapbox: define lowp float opacity\n#pragma mapbox: define lowp vec4 pattern_from\n#pragma mapbox: define lowp vec4 pattern_to\nvoid main() {\n#pragma mapbox: initialize lowp float opacity\n#pragma mapbox: initialize mediump vec4 pattern_from\n#pragma mapbox: initialize mediump vec4 pattern_to\nvec2 pattern_tl_a=pattern_from.xy;vec2 pattern_br_a=pattern_from.zw;vec2 pattern_tl_b=pattern_to.xy;vec2 pattern_br_b=pattern_to.zw;float pixelRatio=u_scale.x;float tileRatio=u_scale.y;float fromScale=u_scale.z;float toScale=u_scale.w;gl_Position=u_matrix*vec4(a_pos,0,1);vec2 display_size_a=vec2((pattern_br_a.x-pattern_tl_a.x)/pixelRatio,(pattern_br_a.y-pattern_tl_a.y)/pixelRatio);vec2 display_size_b=vec2((pattern_br_b.x-pattern_tl_b.x)/pixelRatio,(pattern_br_b.y-pattern_tl_b.y)/pixelRatio);v_pos_a=get_pattern_pos(u_pixel_coord_upper,u_pixel_coord_lower,fromScale*display_size_a,tileRatio,a_pos);v_pos_b=get_pattern_pos(u_pixel_coord_upper,u_pixel_coord_lower,toScale*display_size_b,tileRatio,a_pos);v_pos=(gl_Position.xy/gl_Position.w+1.0)/2.0*u_world;}";
+var fillOutlinePatternVert = "uniform mat4 u_matrix;\r\nuniform vec2 u_world;\r\nuniform vec2 u_pixel_coord_upper;\r\nuniform vec2 u_pixel_coord_lower;\r\nuniform vec4 u_scale;\r\nattribute vec2 a_pos;\r\nvarying vec2 v_pos_a;\r\nvarying vec2 v_pos_b;\r\nvarying vec2 v_pos;\r\n#pragma mapbox: define lowp float opacity\r\n#pragma mapbox: define lowp vec4 pattern_from\r\n#pragma mapbox: define lowp vec4 pattern_to\r\nvoid main() {\r\n#pragma mapbox: initialize lowp float opacity\r\n#pragma mapbox: initialize mediump vec4 pattern_from\r\n#pragma mapbox: initialize mediump vec4 pattern_to\r\nvec2 pattern_tl_a=pattern_from.xy;\r\nvec2 pattern_br_a=pattern_from.zw;\r\nvec2 pattern_tl_b=pattern_to.xy;\r\nvec2 pattern_br_b=pattern_to.zw;\r\nfloat pixelRatio=u_scale.x;\r\nfloat tileRatio=u_scale.y;\r\nfloat fromScale=u_scale.z;\r\nfloat toScale=u_scale.w;\r\ngl_Position=u_matrix*vec4(a_pos,0,1);\r\nvec2 display_size_a=vec2((pattern_br_a.x-pattern_tl_a.x)/pixelRatio,(pattern_br_a.y-pattern_tl_a.y)/pixelRatio);\r\nvec2 display_size_b=vec2((pattern_br_b.x-pattern_tl_b.x)/pixelRatio,(pattern_br_b.y-pattern_tl_b.y)/pixelRatio);\r\nv_pos_a=get_pattern_pos(u_pixel_coord_upper,u_pixel_coord_lower,fromScale*display_size_a,tileRatio,a_pos);\r\nv_pos_b=get_pattern_pos(u_pixel_coord_upper,u_pixel_coord_lower,toScale*display_size_b,tileRatio,a_pos);\r\nv_pos=(gl_Position.xy/gl_Position.w+1.0)/2.0*u_world;\r\n}";
 
-var fillPatternFrag = "uniform vec2 u_texsize;uniform float u_fade;uniform sampler2D u_image;varying vec2 v_pos_a;varying vec2 v_pos_b;\n#pragma mapbox: define lowp float opacity\n#pragma mapbox: define lowp vec4 pattern_from\n#pragma mapbox: define lowp vec4 pattern_to\nvoid main() {\n#pragma mapbox: initialize lowp float opacity\n#pragma mapbox: initialize mediump vec4 pattern_from\n#pragma mapbox: initialize mediump vec4 pattern_to\nvec2 pattern_tl_a=pattern_from.xy;vec2 pattern_br_a=pattern_from.zw;vec2 pattern_tl_b=pattern_to.xy;vec2 pattern_br_b=pattern_to.zw;vec2 imagecoord=mod(v_pos_a,1.0);vec2 pos=mix(pattern_tl_a/u_texsize,pattern_br_a/u_texsize,imagecoord);vec4 color1=texture2D(u_image,pos);vec2 imagecoord_b=mod(v_pos_b,1.0);vec2 pos2=mix(pattern_tl_b/u_texsize,pattern_br_b/u_texsize,imagecoord_b);vec4 color2=texture2D(u_image,pos2);gl_FragColor=mix(color1,color2,u_fade)*opacity;\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var fillPatternFrag = "uniform vec2 u_texsize;\r\nuniform float u_fade;\r\nuniform sampler2D u_image;\r\nvarying vec2 v_pos_a;\r\nvarying vec2 v_pos_b;\r\n#pragma mapbox: define lowp float opacity\r\n#pragma mapbox: define lowp vec4 pattern_from\r\n#pragma mapbox: define lowp vec4 pattern_to\r\nvoid main() {\r\n#pragma mapbox: initialize lowp float opacity\r\n#pragma mapbox: initialize mediump vec4 pattern_from\r\n#pragma mapbox: initialize mediump vec4 pattern_to\r\nvec2 pattern_tl_a=pattern_from.xy;\r\nvec2 pattern_br_a=pattern_from.zw;\r\nvec2 pattern_tl_b=pattern_to.xy;\r\nvec2 pattern_br_b=pattern_to.zw;\r\nvec2 imagecoord=mod(v_pos_a,1.0);\r\nvec2 pos=mix(pattern_tl_a/u_texsize,pattern_br_a/u_texsize,imagecoord);\r\nvec4 color1=texture2D(u_image,pos);\r\nvec2 imagecoord_b=mod(v_pos_b,1.0);\r\nvec2 pos2=mix(pattern_tl_b/u_texsize,pattern_br_b/u_texsize,imagecoord_b);\r\nvec4 color2=texture2D(u_image,pos2);\r\ngl_FragColor=mix(color1,color2,u_fade)*opacity;\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var fillPatternVert = "uniform mat4 u_matrix;uniform vec2 u_pixel_coord_upper;uniform vec2 u_pixel_coord_lower;uniform vec4 u_scale;attribute vec2 a_pos;varying vec2 v_pos_a;varying vec2 v_pos_b;\n#pragma mapbox: define lowp float opacity\n#pragma mapbox: define lowp vec4 pattern_from\n#pragma mapbox: define lowp vec4 pattern_to\nvoid main() {\n#pragma mapbox: initialize lowp float opacity\n#pragma mapbox: initialize mediump vec4 pattern_from\n#pragma mapbox: initialize mediump vec4 pattern_to\nvec2 pattern_tl_a=pattern_from.xy;vec2 pattern_br_a=pattern_from.zw;vec2 pattern_tl_b=pattern_to.xy;vec2 pattern_br_b=pattern_to.zw;float pixelRatio=u_scale.x;float tileZoomRatio=u_scale.y;float fromScale=u_scale.z;float toScale=u_scale.w;vec2 display_size_a=vec2((pattern_br_a.x-pattern_tl_a.x)/pixelRatio,(pattern_br_a.y-pattern_tl_a.y)/pixelRatio);vec2 display_size_b=vec2((pattern_br_b.x-pattern_tl_b.x)/pixelRatio,(pattern_br_b.y-pattern_tl_b.y)/pixelRatio);gl_Position=u_matrix*vec4(a_pos,0,1);v_pos_a=get_pattern_pos(u_pixel_coord_upper,u_pixel_coord_lower,fromScale*display_size_a,tileZoomRatio,a_pos);v_pos_b=get_pattern_pos(u_pixel_coord_upper,u_pixel_coord_lower,toScale*display_size_b,tileZoomRatio,a_pos);}";
+var fillPatternVert = "uniform mat4 u_matrix;\r\nuniform vec2 u_pixel_coord_upper;\r\nuniform vec2 u_pixel_coord_lower;\r\nuniform vec4 u_scale;\r\nattribute vec2 a_pos;\r\nvarying vec2 v_pos_a;\r\nvarying vec2 v_pos_b;\r\n#pragma mapbox: define lowp float opacity\r\n#pragma mapbox: define lowp vec4 pattern_from\r\n#pragma mapbox: define lowp vec4 pattern_to\r\nvoid main() {\r\n#pragma mapbox: initialize lowp float opacity\r\n#pragma mapbox: initialize mediump vec4 pattern_from\r\n#pragma mapbox: initialize mediump vec4 pattern_to\r\nvec2 pattern_tl_a=pattern_from.xy;\r\nvec2 pattern_br_a=pattern_from.zw;\r\nvec2 pattern_tl_b=pattern_to.xy;\r\nvec2 pattern_br_b=pattern_to.zw;\r\nfloat pixelRatio=u_scale.x;\r\nfloat tileZoomRatio=u_scale.y;\r\nfloat fromScale=u_scale.z;\r\nfloat toScale=u_scale.w;\r\nvec2 display_size_a=vec2((pattern_br_a.x-pattern_tl_a.x)/pixelRatio,(pattern_br_a.y-pattern_tl_a.y)/pixelRatio);\r\nvec2 display_size_b=vec2((pattern_br_b.x-pattern_tl_b.x)/pixelRatio,(pattern_br_b.y-pattern_tl_b.y)/pixelRatio);\r\ngl_Position=u_matrix*vec4(a_pos,0,1);\r\nv_pos_a=get_pattern_pos(u_pixel_coord_upper,u_pixel_coord_lower,fromScale*display_size_a,tileZoomRatio,a_pos);\r\nv_pos_b=get_pattern_pos(u_pixel_coord_upper,u_pixel_coord_lower,toScale*display_size_b,tileZoomRatio,a_pos);\r\n}";
 
-var fillExtrusionFrag = "varying vec4 v_color;void main() {gl_FragColor=v_color;\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var fillExtrusionFrag = "varying vec4 v_color;\r\nvoid main() {\r\ngl_FragColor=v_color;\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var fillExtrusionVert = "uniform mat4 u_matrix;uniform vec3 u_lightcolor;uniform lowp vec3 u_lightpos;uniform lowp float u_lightintensity;uniform float u_vertical_gradient;attribute vec2 a_pos;attribute vec4 a_normal_ed;varying vec4 v_color;\n#pragma mapbox: define highp float base\n#pragma mapbox: define highp float height\n#pragma mapbox: define highp vec4 color\nvoid main() {\n#pragma mapbox: initialize highp float base\n#pragma mapbox: initialize highp float height\n#pragma mapbox: initialize highp vec4 color\nvec3 normal=a_normal_ed.xyz;base=max(0.0,base);height=max(0.0,height);float t=mod(normal.x,2.0);gl_Position=u_matrix*vec4(a_pos,t > 0.0 ? height : base,1);float colorvalue=color.r*0.2126+color.g*0.7152+color.b*0.0722;v_color=vec4(0.0,0.0,0.0,1.0);vec4 ambientlight=vec4(0.03,0.03,0.03,1.0);color+=ambientlight;float directional=clamp(dot(normal/16384.0,u_lightpos),0.0,1.0);directional=mix((1.0-u_lightintensity),max((1.0-colorvalue+u_lightintensity),1.0),directional);if (normal.y !=0.0) {directional*=((1.0-u_vertical_gradient)+(u_vertical_gradient*clamp((t+base)*pow(height/150.0,0.5),mix(0.7,0.98,1.0-u_lightintensity),1.0)));}v_color.r+=clamp(color.r*directional*u_lightcolor.r,mix(0.0,0.3,1.0-u_lightcolor.r),1.0);v_color.g+=clamp(color.g*directional*u_lightcolor.g,mix(0.0,0.3,1.0-u_lightcolor.g),1.0);v_color.b+=clamp(color.b*directional*u_lightcolor.b,mix(0.0,0.3,1.0-u_lightcolor.b),1.0);}";
+var fillExtrusionVert = "uniform mat4 u_matrix;\r\nuniform vec3 u_lightcolor;\r\nuniform lowp vec3 u_lightpos;\r\nuniform lowp float u_lightintensity;\r\nuniform float u_vertical_gradient;\r\nattribute vec2 a_pos;\r\nattribute vec4 a_normal_ed;\r\nvarying vec4 v_color;\r\n#pragma mapbox: define highp float base\r\n#pragma mapbox: define highp float height\r\n#pragma mapbox: define highp vec4 color\r\nvoid main() {\r\n#pragma mapbox: initialize highp float base\r\n#pragma mapbox: initialize highp float height\r\n#pragma mapbox: initialize highp vec4 color\r\nvec3 normal=a_normal_ed.xyz;\r\nbase=max(0.0,base);\r\nheight=max(0.0,height);\r\nfloat t=mod(normal.x,2.0);\r\ngl_Position=u_matrix*vec4(a_pos,t > 0.0 ? height : base,1);float colorvalue=color.r*0.2126+color.g*0.7152+color.b*0.0722;\r\nv_color=vec4(0.0,0.0,0.0,1.0);vec4 ambientlight=vec4(0.03,0.03,0.03,1.0);\r\ncolor+=ambientlight;float directional=clamp(dot(normal/16384.0,u_lightpos),0.0,1.0);directional=mix((1.0-u_lightintensity),max((1.0-colorvalue+u_lightintensity),1.0),directional);if (normal.y !=0.0) {directional*=(\r\n(1.0-u_vertical_gradient)+\n(u_vertical_gradient*clamp((t+base)*pow(height/150.0,0.5),mix(0.7,0.98,1.0-u_lightintensity),1.0)));\r\n}v_color.r+=clamp(color.r*directional*u_lightcolor.r,mix(0.0,0.3,1.0-u_lightcolor.r),1.0);\r\nv_color.g+=clamp(color.g*directional*u_lightcolor.g,mix(0.0,0.3,1.0-u_lightcolor.g),1.0);\r\nv_color.b+=clamp(color.b*directional*u_lightcolor.b,mix(0.0,0.3,1.0-u_lightcolor.b),1.0);\r\n}";
 
-var fillExtrusionPatternFrag = "uniform vec2 u_texsize;uniform float u_fade;uniform sampler2D u_image;varying vec2 v_pos_a;varying vec2 v_pos_b;varying vec4 v_lighting;\n#pragma mapbox: define lowp float base\n#pragma mapbox: define lowp float height\n#pragma mapbox: define lowp vec4 pattern_from\n#pragma mapbox: define lowp vec4 pattern_to\nvoid main() {\n#pragma mapbox: initialize lowp float base\n#pragma mapbox: initialize lowp float height\n#pragma mapbox: initialize mediump vec4 pattern_from\n#pragma mapbox: initialize mediump vec4 pattern_to\nvec2 pattern_tl_a=pattern_from.xy;vec2 pattern_br_a=pattern_from.zw;vec2 pattern_tl_b=pattern_to.xy;vec2 pattern_br_b=pattern_to.zw;vec2 imagecoord=mod(v_pos_a,1.0);vec2 pos=mix(pattern_tl_a/u_texsize,pattern_br_a/u_texsize,imagecoord);vec4 color1=texture2D(u_image,pos);vec2 imagecoord_b=mod(v_pos_b,1.0);vec2 pos2=mix(pattern_tl_b/u_texsize,pattern_br_b/u_texsize,imagecoord_b);vec4 color2=texture2D(u_image,pos2);vec4 mixedColor=mix(color1,color2,u_fade);gl_FragColor=mixedColor*v_lighting;\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var fillExtrusionPatternFrag = "uniform vec2 u_texsize;\r\nuniform float u_fade;\r\nuniform sampler2D u_image;\r\nvarying vec2 v_pos_a;\r\nvarying vec2 v_pos_b;\r\nvarying vec4 v_lighting;\r\n#pragma mapbox: define lowp float base\r\n#pragma mapbox: define lowp float height\r\n#pragma mapbox: define lowp vec4 pattern_from\r\n#pragma mapbox: define lowp vec4 pattern_to\r\nvoid main() {\r\n#pragma mapbox: initialize lowp float base\r\n#pragma mapbox: initialize lowp float height\r\n#pragma mapbox: initialize mediump vec4 pattern_from\r\n#pragma mapbox: initialize mediump vec4 pattern_to\r\nvec2 pattern_tl_a=pattern_from.xy;\r\nvec2 pattern_br_a=pattern_from.zw;\r\nvec2 pattern_tl_b=pattern_to.xy;\r\nvec2 pattern_br_b=pattern_to.zw;\r\nvec2 imagecoord=mod(v_pos_a,1.0);\r\nvec2 pos=mix(pattern_tl_a/u_texsize,pattern_br_a/u_texsize,imagecoord);\r\nvec4 color1=texture2D(u_image,pos);\r\nvec2 imagecoord_b=mod(v_pos_b,1.0);\r\nvec2 pos2=mix(pattern_tl_b/u_texsize,pattern_br_b/u_texsize,imagecoord_b);\r\nvec4 color2=texture2D(u_image,pos2);\r\nvec4 mixedColor=mix(color1,color2,u_fade);\r\ngl_FragColor=mixedColor*v_lighting;\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var fillExtrusionPatternVert = "uniform mat4 u_matrix;uniform vec2 u_pixel_coord_upper;uniform vec2 u_pixel_coord_lower;uniform float u_height_factor;uniform vec4 u_scale;uniform float u_vertical_gradient;uniform vec3 u_lightcolor;uniform lowp vec3 u_lightpos;uniform lowp float u_lightintensity;attribute vec2 a_pos;attribute vec4 a_normal_ed;varying vec2 v_pos_a;varying vec2 v_pos_b;varying vec4 v_lighting;\n#pragma mapbox: define lowp float base\n#pragma mapbox: define lowp float height\n#pragma mapbox: define lowp vec4 pattern_from\n#pragma mapbox: define lowp vec4 pattern_to\nvoid main() {\n#pragma mapbox: initialize lowp float base\n#pragma mapbox: initialize lowp float height\n#pragma mapbox: initialize mediump vec4 pattern_from\n#pragma mapbox: initialize mediump vec4 pattern_to\nvec2 pattern_tl_a=pattern_from.xy;vec2 pattern_br_a=pattern_from.zw;vec2 pattern_tl_b=pattern_to.xy;vec2 pattern_br_b=pattern_to.zw;float pixelRatio=u_scale.x;float tileRatio=u_scale.y;float fromScale=u_scale.z;float toScale=u_scale.w;vec3 normal=a_normal_ed.xyz;float edgedistance=a_normal_ed.w;vec2 display_size_a=vec2((pattern_br_a.x-pattern_tl_a.x)/pixelRatio,(pattern_br_a.y-pattern_tl_a.y)/pixelRatio);vec2 display_size_b=vec2((pattern_br_b.x-pattern_tl_b.x)/pixelRatio,(pattern_br_b.y-pattern_tl_b.y)/pixelRatio);base=max(0.0,base);height=max(0.0,height);float t=mod(normal.x,2.0);float z=t > 0.0 ? height : base;gl_Position=u_matrix*vec4(a_pos,z,1);vec2 pos=normal.x==1.0 && normal.y==0.0 && normal.z==16384.0\n? a_pos\n: vec2(edgedistance,z*u_height_factor);v_pos_a=get_pattern_pos(u_pixel_coord_upper,u_pixel_coord_lower,fromScale*display_size_a,tileRatio,pos);v_pos_b=get_pattern_pos(u_pixel_coord_upper,u_pixel_coord_lower,toScale*display_size_b,tileRatio,pos);v_lighting=vec4(0.0,0.0,0.0,1.0);float directional=clamp(dot(normal/16383.0,u_lightpos),0.0,1.0);directional=mix((1.0-u_lightintensity),max((0.5+u_lightintensity),1.0),directional);if (normal.y !=0.0) {directional*=((1.0-u_vertical_gradient)+(u_vertical_gradient*clamp((t+base)*pow(height/150.0,0.5),mix(0.7,0.98,1.0-u_lightintensity),1.0)));}v_lighting.rgb+=clamp(directional*u_lightcolor,mix(vec3(0.0),vec3(0.3),1.0-u_lightcolor),vec3(1.0));}";
+var fillExtrusionPatternVert = "uniform mat4 u_matrix;\r\nuniform vec2 u_pixel_coord_upper;\r\nuniform vec2 u_pixel_coord_lower;\r\nuniform float u_height_factor;\r\nuniform vec4 u_scale;\r\nuniform float u_vertical_gradient;\r\nuniform vec3 u_lightcolor;\r\nuniform lowp vec3 u_lightpos;\r\nuniform lowp float u_lightintensity;\r\nattribute vec2 a_pos;\r\nattribute vec4 a_normal_ed;\r\nvarying vec2 v_pos_a;\r\nvarying vec2 v_pos_b;\r\nvarying vec4 v_lighting;\r\n#pragma mapbox: define lowp float base\r\n#pragma mapbox: define lowp float height\r\n#pragma mapbox: define lowp vec4 pattern_from\r\n#pragma mapbox: define lowp vec4 pattern_to\r\nvoid main() {\r\n#pragma mapbox: initialize lowp float base\r\n#pragma mapbox: initialize lowp float height\r\n#pragma mapbox: initialize mediump vec4 pattern_from\r\n#pragma mapbox: initialize mediump vec4 pattern_to\r\nvec2 pattern_tl_a=pattern_from.xy;\r\nvec2 pattern_br_a=pattern_from.zw;\r\nvec2 pattern_tl_b=pattern_to.xy;\r\nvec2 pattern_br_b=pattern_to.zw;\r\nfloat pixelRatio=u_scale.x;\r\nfloat tileRatio=u_scale.y;\r\nfloat fromScale=u_scale.z;\r\nfloat toScale=u_scale.w;\r\nvec3 normal=a_normal_ed.xyz;\r\nfloat edgedistance=a_normal_ed.w;\r\nvec2 display_size_a=vec2((pattern_br_a.x-pattern_tl_a.x)/pixelRatio,(pattern_br_a.y-pattern_tl_a.y)/pixelRatio);\r\nvec2 display_size_b=vec2((pattern_br_b.x-pattern_tl_b.x)/pixelRatio,(pattern_br_b.y-pattern_tl_b.y)/pixelRatio);\r\nbase=max(0.0,base);\r\nheight=max(0.0,height);\r\nfloat t=mod(normal.x,2.0);\r\nfloat z=t > 0.0 ? height : base;\r\ngl_Position=u_matrix*vec4(a_pos,z,1);\r\nvec2 pos=normal.x==1.0 && normal.y==0.0 && normal.z==16384.0\r\n? a_pos\n: vec2(edgedistance,z*u_height_factor);v_pos_a=get_pattern_pos(u_pixel_coord_upper,u_pixel_coord_lower,fromScale*display_size_a,tileRatio,pos);\r\nv_pos_b=get_pattern_pos(u_pixel_coord_upper,u_pixel_coord_lower,toScale*display_size_b,tileRatio,pos);\r\nv_lighting=vec4(0.0,0.0,0.0,1.0);\r\nfloat directional=clamp(dot(normal/16383.0,u_lightpos),0.0,1.0);\r\ndirectional=mix((1.0-u_lightintensity),max((0.5+u_lightintensity),1.0),directional);\r\nif (normal.y !=0.0) {directional*=(\r\n(1.0-u_vertical_gradient)+\n(u_vertical_gradient*clamp((t+base)*pow(height/150.0,0.5),mix(0.7,0.98,1.0-u_lightintensity),1.0)));\r\n}\r\nv_lighting.rgb+=clamp(directional*u_lightcolor,mix(vec3(0.0),vec3(0.3),1.0-u_lightcolor),vec3(1.0));\r\n}";
 
-var extrusionTextureFrag = "uniform sampler2D u_image;uniform float u_opacity;varying vec2 v_pos;void main() {gl_FragColor=texture2D(u_image,v_pos)*u_opacity;\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(0.0);\n#endif\n}";
+var extrusionTextureFrag = "uniform sampler2D u_image;\r\nuniform float u_opacity;\r\nvarying vec2 v_pos;\r\nvoid main() {\r\ngl_FragColor=texture2D(u_image,v_pos)*u_opacity;\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(0.0);\r\n#endif\r\n}";
 
-var extrusionTextureVert = "uniform mat4 u_matrix;uniform vec2 u_world;attribute vec2 a_pos;varying vec2 v_pos;void main() {gl_Position=u_matrix*vec4(a_pos*u_world,0,1);v_pos.x=a_pos.x;v_pos.y=1.0-a_pos.y;}";
+var extrusionTextureVert = "uniform mat4 u_matrix;\r\nuniform vec2 u_world;\r\nattribute vec2 a_pos;\r\nvarying vec2 v_pos;\r\nvoid main() {\r\ngl_Position=u_matrix*vec4(a_pos*u_world,0,1);\r\nv_pos.x=a_pos.x;\r\nv_pos.y=1.0-a_pos.y;\r\n}";
 
-var hillshadePrepareFrag = "#ifdef GL_ES\nprecision highp float;\n#endif\nuniform sampler2D u_image;varying vec2 v_pos;uniform vec2 u_dimension;uniform float u_zoom;uniform float u_maxzoom;float getElevation(vec2 coord,float bias) {vec4 data=texture2D(u_image,coord)*255.0;return (data.r+data.g*256.0+data.b*256.0*256.0)/4.0;}void main() {vec2 epsilon=1.0/u_dimension;float a=getElevation(v_pos+vec2(-epsilon.x,-epsilon.y),0.0);float b=getElevation(v_pos+vec2(0,-epsilon.y),0.0);float c=getElevation(v_pos+vec2(epsilon.x,-epsilon.y),0.0);float d=getElevation(v_pos+vec2(-epsilon.x,0),0.0);float e=getElevation(v_pos,0.0);float f=getElevation(v_pos+vec2(epsilon.x,0),0.0);float g=getElevation(v_pos+vec2(-epsilon.x,epsilon.y),0.0);float h=getElevation(v_pos+vec2(0,epsilon.y),0.0);float i=getElevation(v_pos+vec2(epsilon.x,epsilon.y),0.0);float exaggeration=u_zoom < 2.0 ? 0.4 : u_zoom < 4.5 ? 0.35 : 0.3;vec2 deriv=vec2((c+f+f+i)-(a+d+d+g),(g+h+h+i)-(a+b+b+c))/ pow(2.0,(u_zoom-u_maxzoom)*exaggeration+19.2562-u_zoom);gl_FragColor=clamp(vec4(deriv.x/2.0+0.5,deriv.y/2.0+0.5,1.0,1.0),0.0,1.0);\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var hillshadePrepareFrag = "#ifdef GL_ES\r\nprecision highp float;\r\n#endif\r\nuniform sampler2D u_image;\r\nvarying vec2 v_pos;\r\nuniform vec2 u_dimension;\r\nuniform float u_zoom;\r\nuniform float u_maxzoom;\r\nfloat getElevation(vec2 coord,float bias) {vec4 data=texture2D(u_image,coord)*255.0;\r\nreturn (data.r+data.g*256.0+data.b*256.0*256.0)/4.0;\r\n}\r\nvoid main() {\r\nvec2 epsilon=1.0/u_dimension;float a=getElevation(v_pos+vec2(-epsilon.x,-epsilon.y),0.0);\r\nfloat b=getElevation(v_pos+vec2(0,-epsilon.y),0.0);\r\nfloat c=getElevation(v_pos+vec2(epsilon.x,-epsilon.y),0.0);\r\nfloat d=getElevation(v_pos+vec2(-epsilon.x,0),0.0);\r\nfloat e=getElevation(v_pos,0.0);\r\nfloat f=getElevation(v_pos+vec2(epsilon.x,0),0.0);\r\nfloat g=getElevation(v_pos+vec2(-epsilon.x,epsilon.y),0.0);\r\nfloat h=getElevation(v_pos+vec2(0,epsilon.y),0.0);\r\nfloat i=getElevation(v_pos+vec2(epsilon.x,epsilon.y),0.0);float exaggeration=u_zoom < 2.0 ? 0.4 : u_zoom < 4.5 ? 0.35 : 0.3;\r\nvec2 deriv=vec2(\r\n(c+f+f+i)-(a+d+d+g),(g+h+h+i)-(a+b+b+c)\r\n)/ pow(2.0,(u_zoom-u_maxzoom)*exaggeration+19.2562-u_zoom);\r\ngl_FragColor=clamp(vec4(\r\nderiv.x/2.0+0.5,deriv.y/2.0+0.5,1.0,1.0),0.0,1.0);\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var hillshadePrepareVert = "uniform mat4 u_matrix;uniform vec2 u_dimension;attribute vec2 a_pos;attribute vec2 a_texture_pos;varying vec2 v_pos;void main() {gl_Position=u_matrix*vec4(a_pos,0,1);highp vec2 epsilon=1.0/u_dimension;float scale=(u_dimension.x-2.0)/u_dimension.x;v_pos=(a_texture_pos/8192.0)*scale+epsilon;}";
+var hillshadePrepareVert = "uniform mat4 u_matrix;\r\nuniform vec2 u_dimension;\r\nattribute vec2 a_pos;\r\nattribute vec2 a_texture_pos;\r\nvarying vec2 v_pos;\r\nvoid main() {\r\ngl_Position=u_matrix*vec4(a_pos,0,1);\r\nhighp vec2 epsilon=1.0/u_dimension;\r\nfloat scale=(u_dimension.x-2.0)/u_dimension.x;\r\nv_pos=(a_texture_pos/8192.0)*scale+epsilon;\r\n}";
 
-var hillshadeFrag = "uniform sampler2D u_image;varying vec2 v_pos;uniform vec2 u_latrange;uniform vec2 u_light;uniform vec4 u_shadow;uniform vec4 u_highlight;uniform vec4 u_accent;\n#define PI 3.141592653589793\nvoid main() {vec4 pixel=texture2D(u_image,v_pos);vec2 deriv=((pixel.rg*2.0)-1.0);float scaleFactor=cos(radians((u_latrange[0]-u_latrange[1])*(1.0-v_pos.y)+u_latrange[1]));float slope=atan(1.25*length(deriv)/scaleFactor);float aspect=deriv.x !=0.0 ? atan(deriv.y,-deriv.x) : PI/2.0*(deriv.y > 0.0 ? 1.0 :-1.0);float intensity=u_light.x;float azimuth=u_light.y+PI;float base=1.875-intensity*1.75;float maxValue=0.5*PI;float scaledSlope=intensity !=0.5 ? ((pow(base,slope)-1.0)/(pow(base,maxValue)-1.0))*maxValue : slope;float accent=cos(scaledSlope);vec4 accent_color=(1.0-accent)*u_accent*clamp(intensity*2.0,0.0,1.0);float shade=abs(mod((aspect+azimuth)/PI+0.5,2.0)-1.0);vec4 shade_color=mix(u_shadow,u_highlight,shade)*sin(scaledSlope)*clamp(intensity*2.0,0.0,1.0);gl_FragColor=accent_color*(1.0-shade_color.a)+shade_color;\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var hillshadeFrag = "uniform sampler2D u_image;\r\nvarying vec2 v_pos;\r\nuniform vec2 u_latrange;\r\nuniform vec2 u_light;\r\nuniform vec4 u_shadow;\r\nuniform vec4 u_highlight;\r\nuniform vec4 u_accent;\r\n#define PI 3.141592653589793\r\nvoid main() {\r\nvec4 pixel=texture2D(u_image,v_pos);\r\nvec2 deriv=((pixel.rg*2.0)-1.0);float scaleFactor=cos(radians((u_latrange[0]-u_latrange[1])*(1.0-v_pos.y)+u_latrange[1]));float slope=atan(1.25*length(deriv)/scaleFactor);\r\nfloat aspect=deriv.x !=0.0 ? atan(deriv.y,-deriv.x) : PI/2.0*(deriv.y > 0.0 ? 1.0 :-1.0);\r\nfloat intensity=u_light.x;float azimuth=u_light.y+PI;float base=1.875-intensity*1.75;\r\nfloat maxValue=0.5*PI;\r\nfloat scaledSlope=intensity !=0.5 ? ((pow(base,slope)-1.0)/(pow(base,maxValue)-1.0))*maxValue : slope;float accent=cos(scaledSlope);vec4 accent_color=(1.0-accent)*u_accent*clamp(intensity*2.0,0.0,1.0);\r\nfloat shade=abs(mod((aspect+azimuth)/PI+0.5,2.0)-1.0);\r\nvec4 shade_color=mix(u_shadow,u_highlight,shade)*sin(scaledSlope)*clamp(intensity*2.0,0.0,1.0);\r\ngl_FragColor=accent_color*(1.0-shade_color.a)+shade_color;\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var hillshadeVert = "uniform mat4 u_matrix;attribute vec2 a_pos;attribute vec2 a_texture_pos;varying vec2 v_pos;void main() {gl_Position=u_matrix*vec4(a_pos,0,1);v_pos=a_texture_pos/8192.0;}";
+var hillshadeVert = "uniform mat4 u_matrix;\r\nattribute vec2 a_pos;\r\nattribute vec2 a_texture_pos;\r\nvarying vec2 v_pos;\r\nvoid main() {\r\ngl_Position=u_matrix*vec4(a_pos,0,1);\r\nv_pos=a_texture_pos/8192.0;\r\n}";
 
-var lineFrag = "#pragma mapbox: define highp vec4 color\n#pragma mapbox: define lowp float blur\n#pragma mapbox: define lowp float opacity\nvarying vec2 v_width2;varying vec2 v_normal;varying float v_gamma_scale;void main() {\n#pragma mapbox: initialize highp vec4 color\n#pragma mapbox: initialize lowp float blur\n#pragma mapbox: initialize lowp float opacity\nfloat dist=length(v_normal)*v_width2.s;float blur2=(blur+1.0/DEVICE_PIXEL_RATIO)*v_gamma_scale;float alpha=clamp(min(dist-(v_width2.t-blur2),v_width2.s-dist)/blur2,0.0,1.0);gl_FragColor=color*(alpha*opacity);\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var lineFrag = "#pragma mapbox: define highp vec4 color\r\n#pragma mapbox: define lowp float blur\r\n#pragma mapbox: define lowp float opacity\r\nvarying vec2 v_width2;\r\nvarying vec2 v_normal;\r\nvarying float v_gamma_scale;\r\nvoid main() {\r\n#pragma mapbox: initialize highp vec4 color\r\n#pragma mapbox: initialize lowp float blur\r\n#pragma mapbox: initialize lowp float opacity\nfloat dist=length(v_normal)*v_width2.s;float blur2=(blur+1.0/DEVICE_PIXEL_RATIO)*v_gamma_scale;\r\nfloat alpha=clamp(min(dist-(v_width2.t-blur2),v_width2.s-dist)/blur2,0.0,1.0);\r\ngl_FragColor=color*(alpha*opacity);\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var lineVert = "\n#define ANTIALIASING 1.0/DEVICE_PIXEL_RATIO/2.0\n#define scale 0.015873016\nattribute vec4 a_pos_normal;attribute vec4 a_data;uniform mat4 u_matrix;uniform mediump float u_ratio;uniform vec2 u_gl_units_to_pixels;varying vec2 v_normal;varying vec2 v_width2;varying float v_gamma_scale;varying highp float v_linesofar;\n#pragma mapbox: define highp vec4 color\n#pragma mapbox: define lowp float blur\n#pragma mapbox: define lowp float opacity\n#pragma mapbox: define mediump float gapwidth\n#pragma mapbox: define lowp float offset\n#pragma mapbox: define mediump float width\nvoid main() {\n#pragma mapbox: initialize highp vec4 color\n#pragma mapbox: initialize lowp float blur\n#pragma mapbox: initialize lowp float opacity\n#pragma mapbox: initialize mediump float gapwidth\n#pragma mapbox: initialize lowp float offset\n#pragma mapbox: initialize mediump float width\nvec2 a_extrude=a_data.xy-128.0;float a_direction=mod(a_data.z,4.0)-1.0;v_linesofar=(floor(a_data.z/4.0)+a_data.w*64.0)*2.0;vec2 pos=a_pos_normal.xy;mediump vec2 normal=a_pos_normal.zw;v_normal=normal;gapwidth=gapwidth/2.0;float halfwidth=width/2.0;offset=-1.0*offset;float inset=gapwidth+(gapwidth > 0.0 ? ANTIALIASING : 0.0);float outset=gapwidth+halfwidth*(gapwidth > 0.0 ? 2.0 : 1.0)+(halfwidth==0.0 ? 0.0 : ANTIALIASING);mediump vec2 dist=outset*a_extrude*scale;mediump float u=0.5*a_direction;mediump float t=1.0-abs(u);mediump vec2 offset2=offset*a_extrude*scale*normal.y*mat2(t,-u,u,t);vec4 projected_extrude=u_matrix*vec4(dist/u_ratio,0.0,0.0);gl_Position=u_matrix*vec4(pos+offset2/u_ratio,0.0,1.0)+projected_extrude;float extrude_length_without_perspective=length(dist);float extrude_length_with_perspective=length(projected_extrude.xy/gl_Position.w*u_gl_units_to_pixels);v_gamma_scale=extrude_length_without_perspective/extrude_length_with_perspective;v_width2=vec2(outset,inset);}";
+var lineVert = "\n#define ANTIALIASING 1.0/DEVICE_PIXEL_RATIO/2.0\n#define scale 0.015873016\r\nattribute vec4 a_pos_normal;\r\nattribute vec4 a_data;\r\nuniform mat4 u_matrix;\r\nuniform mediump float u_ratio;\r\nuniform vec2 u_gl_units_to_pixels;\r\nvarying vec2 v_normal;\r\nvarying vec2 v_width2;\r\nvarying float v_gamma_scale;\r\nvarying highp float v_linesofar;\r\n#pragma mapbox: define highp vec4 color\r\n#pragma mapbox: define lowp float blur\r\n#pragma mapbox: define lowp float opacity\r\n#pragma mapbox: define mediump float gapwidth\r\n#pragma mapbox: define lowp float offset\r\n#pragma mapbox: define mediump float width\r\nvoid main() {\r\n#pragma mapbox: initialize highp vec4 color\r\n#pragma mapbox: initialize lowp float blur\r\n#pragma mapbox: initialize lowp float opacity\r\n#pragma mapbox: initialize mediump float gapwidth\r\n#pragma mapbox: initialize lowp float offset\r\n#pragma mapbox: initialize mediump float width\r\nvec2 a_extrude=a_data.xy-128.0;\r\nfloat a_direction=mod(a_data.z,4.0)-1.0;\r\nv_linesofar=(floor(a_data.z/4.0)+a_data.w*64.0)*2.0;\r\nvec2 pos=a_pos_normal.xy;mediump vec2 normal=a_pos_normal.zw;\r\nv_normal=normal;gapwidth=gapwidth/2.0;\r\nfloat halfwidth=width/2.0;\r\noffset=-1.0*offset;\r\nfloat inset=gapwidth+(gapwidth > 0.0 ? ANTIALIASING : 0.0);\r\nfloat outset=gapwidth+halfwidth*(gapwidth > 0.0 ? 2.0 : 1.0)+(halfwidth==0.0 ? 0.0 : ANTIALIASING);mediump vec2 dist=outset*a_extrude*scale;mediump float u=0.5*a_direction;\r\nmediump float t=1.0-abs(u);\r\nmediump vec2 offset2=offset*a_extrude*scale*normal.y*mat2(t,-u,u,t);\r\nvec4 projected_extrude=u_matrix*vec4(dist/u_ratio,0.0,0.0);\r\ngl_Position=u_matrix*vec4(pos+offset2/u_ratio,0.0,1.0)+projected_extrude;float extrude_length_without_perspective=length(dist);\r\nfloat extrude_length_with_perspective=length(projected_extrude.xy/gl_Position.w*u_gl_units_to_pixels);\r\nv_gamma_scale=extrude_length_without_perspective/extrude_length_with_perspective;\r\nv_width2=vec2(outset,inset);\r\n}";
 
-var lineGradientFrag = "#pragma mapbox: define lowp float blur\n#pragma mapbox: define lowp float opacity\nuniform sampler2D u_image;varying vec2 v_width2;varying vec2 v_normal;varying float v_gamma_scale;varying highp float v_lineprogress;void main() {\n#pragma mapbox: initialize lowp float blur\n#pragma mapbox: initialize lowp float opacity\nfloat dist=length(v_normal)*v_width2.s;float blur2=(blur+1.0/DEVICE_PIXEL_RATIO)*v_gamma_scale;float alpha=clamp(min(dist-(v_width2.t-blur2),v_width2.s-dist)/blur2,0.0,1.0);vec4 color=texture2D(u_image,vec2(v_lineprogress,0.5));gl_FragColor=color*(alpha*opacity);\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var lineGradientFrag = "#pragma mapbox: define lowp float blur\r\n#pragma mapbox: define lowp float opacity\r\nuniform sampler2D u_image;\r\nvarying vec2 v_width2;\r\nvarying vec2 v_normal;\r\nvarying float v_gamma_scale;\r\nvarying highp float v_lineprogress;\r\nvoid main() {\r\n#pragma mapbox: initialize lowp float blur\r\n#pragma mapbox: initialize lowp float opacity\nfloat dist=length(v_normal)*v_width2.s;float blur2=(blur+1.0/DEVICE_PIXEL_RATIO)*v_gamma_scale;\r\nfloat alpha=clamp(min(dist-(v_width2.t-blur2),v_width2.s-dist)/blur2,0.0,1.0);vec4 color=texture2D(u_image,vec2(v_lineprogress,0.5));\r\ngl_FragColor=color*(alpha*opacity);\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var lineGradientVert = "\n#define MAX_LINE_DISTANCE 32767.0\n#define ANTIALIASING 1.0/DEVICE_PIXEL_RATIO/2.0\n#define scale 0.015873016\nattribute vec4 a_pos_normal;attribute vec4 a_data;uniform mat4 u_matrix;uniform mediump float u_ratio;uniform vec2 u_gl_units_to_pixels;varying vec2 v_normal;varying vec2 v_width2;varying float v_gamma_scale;varying highp float v_lineprogress;\n#pragma mapbox: define lowp float blur\n#pragma mapbox: define lowp float opacity\n#pragma mapbox: define mediump float gapwidth\n#pragma mapbox: define lowp float offset\n#pragma mapbox: define mediump float width\nvoid main() {\n#pragma mapbox: initialize lowp float blur\n#pragma mapbox: initialize lowp float opacity\n#pragma mapbox: initialize mediump float gapwidth\n#pragma mapbox: initialize lowp float offset\n#pragma mapbox: initialize mediump float width\nvec2 a_extrude=a_data.xy-128.0;float a_direction=mod(a_data.z,4.0)-1.0;v_lineprogress=(floor(a_data.z/4.0)+a_data.w*64.0)*2.0/MAX_LINE_DISTANCE;vec2 pos=a_pos_normal.xy;mediump vec2 normal=a_pos_normal.zw;v_normal=normal;gapwidth=gapwidth/2.0;float halfwidth=width/2.0;offset=-1.0*offset;float inset=gapwidth+(gapwidth > 0.0 ? ANTIALIASING : 0.0);float outset=gapwidth+halfwidth*(gapwidth > 0.0 ? 2.0 : 1.0)+(halfwidth==0.0 ? 0.0 : ANTIALIASING);mediump vec2 dist=outset*a_extrude*scale;mediump float u=0.5*a_direction;mediump float t=1.0-abs(u);mediump vec2 offset2=offset*a_extrude*scale*normal.y*mat2(t,-u,u,t);vec4 projected_extrude=u_matrix*vec4(dist/u_ratio,0.0,0.0);gl_Position=u_matrix*vec4(pos+offset2/u_ratio,0.0,1.0)+projected_extrude;float extrude_length_without_perspective=length(dist);float extrude_length_with_perspective=length(projected_extrude.xy/gl_Position.w*u_gl_units_to_pixels);v_gamma_scale=extrude_length_without_perspective/extrude_length_with_perspective;v_width2=vec2(outset,inset);}";
+var lineGradientVert = "\n#define MAX_LINE_DISTANCE 32767.0\n#define ANTIALIASING 1.0/DEVICE_PIXEL_RATIO/2.0\n#define scale 0.015873016\r\nattribute vec4 a_pos_normal;\r\nattribute vec4 a_data;\r\nuniform mat4 u_matrix;\r\nuniform mediump float u_ratio;\r\nuniform vec2 u_gl_units_to_pixels;\r\nvarying vec2 v_normal;\r\nvarying vec2 v_width2;\r\nvarying float v_gamma_scale;\r\nvarying highp float v_lineprogress;\r\n#pragma mapbox: define lowp float blur\r\n#pragma mapbox: define lowp float opacity\r\n#pragma mapbox: define mediump float gapwidth\r\n#pragma mapbox: define lowp float offset\r\n#pragma mapbox: define mediump float width\r\nvoid main() {\r\n#pragma mapbox: initialize lowp float blur\r\n#pragma mapbox: initialize lowp float opacity\r\n#pragma mapbox: initialize mediump float gapwidth\r\n#pragma mapbox: initialize lowp float offset\r\n#pragma mapbox: initialize mediump float width\r\nvec2 a_extrude=a_data.xy-128.0;\r\nfloat a_direction=mod(a_data.z,4.0)-1.0;\r\nv_lineprogress=(floor(a_data.z/4.0)+a_data.w*64.0)*2.0/MAX_LINE_DISTANCE;\r\nvec2 pos=a_pos_normal.xy;mediump vec2 normal=a_pos_normal.zw;\r\nv_normal=normal;gapwidth=gapwidth/2.0;\r\nfloat halfwidth=width/2.0;\r\noffset=-1.0*offset;\r\nfloat inset=gapwidth+(gapwidth > 0.0 ? ANTIALIASING : 0.0);\r\nfloat outset=gapwidth+halfwidth*(gapwidth > 0.0 ? 2.0 : 1.0)+(halfwidth==0.0 ? 0.0 : ANTIALIASING);mediump vec2 dist=outset*a_extrude*scale;mediump float u=0.5*a_direction;\r\nmediump float t=1.0-abs(u);\r\nmediump vec2 offset2=offset*a_extrude*scale*normal.y*mat2(t,-u,u,t);\r\nvec4 projected_extrude=u_matrix*vec4(dist/u_ratio,0.0,0.0);\r\ngl_Position=u_matrix*vec4(pos+offset2/u_ratio,0.0,1.0)+projected_extrude;float extrude_length_without_perspective=length(dist);\r\nfloat extrude_length_with_perspective=length(projected_extrude.xy/gl_Position.w*u_gl_units_to_pixels);\r\nv_gamma_scale=extrude_length_without_perspective/extrude_length_with_perspective;\r\nv_width2=vec2(outset,inset);\r\n}";
 
-var linePatternFrag = "uniform vec2 u_texsize;uniform float u_fade;uniform mediump vec4 u_scale;uniform sampler2D u_image;varying vec2 v_normal;varying vec2 v_width2;varying float v_linesofar;varying float v_gamma_scale;\n#pragma mapbox: define lowp vec4 pattern_from\n#pragma mapbox: define lowp vec4 pattern_to\n#pragma mapbox: define lowp float blur\n#pragma mapbox: define lowp float opacity\nvoid main() {\n#pragma mapbox: initialize mediump vec4 pattern_from\n#pragma mapbox: initialize mediump vec4 pattern_to\n#pragma mapbox: initialize lowp float blur\n#pragma mapbox: initialize lowp float opacity\nvec2 pattern_tl_a=pattern_from.xy;vec2 pattern_br_a=pattern_from.zw;vec2 pattern_tl_b=pattern_to.xy;vec2 pattern_br_b=pattern_to.zw;float pixelRatio=u_scale.x;float tileZoomRatio=u_scale.y;float fromScale=u_scale.z;float toScale=u_scale.w;vec2 display_size_a=vec2((pattern_br_a.x-pattern_tl_a.x)/pixelRatio,(pattern_br_a.y-pattern_tl_a.y)/pixelRatio);vec2 display_size_b=vec2((pattern_br_b.x-pattern_tl_b.x)/pixelRatio,(pattern_br_b.y-pattern_tl_b.y)/pixelRatio);vec2 pattern_size_a=vec2(display_size_a.x*fromScale/tileZoomRatio,display_size_a.y);vec2 pattern_size_b=vec2(display_size_b.x*toScale/tileZoomRatio,display_size_b.y);float dist=length(v_normal)*v_width2.s;float blur2=(blur+1.0/DEVICE_PIXEL_RATIO)*v_gamma_scale;float alpha=clamp(min(dist-(v_width2.t-blur2),v_width2.s-dist)/blur2,0.0,1.0);float x_a=mod(v_linesofar/pattern_size_a.x,1.0);float x_b=mod(v_linesofar/pattern_size_b.x,1.0);float y_a=0.5+(v_normal.y*clamp(v_width2.s,0.0,(pattern_size_a.y+2.0)/2.0)/pattern_size_a.y);float y_b=0.5+(v_normal.y*clamp(v_width2.s,0.0,(pattern_size_b.y+2.0)/2.0)/pattern_size_b.y);vec2 pos_a=mix(pattern_tl_a/u_texsize,pattern_br_a/u_texsize,vec2(x_a,y_a));vec2 pos_b=mix(pattern_tl_b/u_texsize,pattern_br_b/u_texsize,vec2(x_b,y_b));vec4 color=mix(texture2D(u_image,pos_a),texture2D(u_image,pos_b),u_fade);gl_FragColor=color*alpha*opacity;\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var linePatternFrag = "uniform vec2 u_texsize;\r\nuniform float u_fade;\r\nuniform mediump vec4 u_scale;\r\nuniform sampler2D u_image;\r\nvarying vec2 v_normal;\r\nvarying vec2 v_width2;\r\nvarying float v_linesofar;\r\nvarying float v_gamma_scale;\r\n#pragma mapbox: define lowp vec4 pattern_from\r\n#pragma mapbox: define lowp vec4 pattern_to\r\n#pragma mapbox: define lowp float blur\r\n#pragma mapbox: define lowp float opacity\r\nvoid main() {\r\n#pragma mapbox: initialize mediump vec4 pattern_from\r\n#pragma mapbox: initialize mediump vec4 pattern_to\r\n#pragma mapbox: initialize lowp float blur\r\n#pragma mapbox: initialize lowp float opacity\r\nvec2 pattern_tl_a=pattern_from.xy;\r\nvec2 pattern_br_a=pattern_from.zw;\r\nvec2 pattern_tl_b=pattern_to.xy;\r\nvec2 pattern_br_b=pattern_to.zw;\r\nfloat pixelRatio=u_scale.x;\r\nfloat tileZoomRatio=u_scale.y;\r\nfloat fromScale=u_scale.z;\r\nfloat toScale=u_scale.w;\r\nvec2 display_size_a=vec2((pattern_br_a.x-pattern_tl_a.x)/pixelRatio,(pattern_br_a.y-pattern_tl_a.y)/pixelRatio);\r\nvec2 display_size_b=vec2((pattern_br_b.x-pattern_tl_b.x)/pixelRatio,(pattern_br_b.y-pattern_tl_b.y)/pixelRatio);\r\nvec2 pattern_size_a=vec2(display_size_a.x*fromScale/tileZoomRatio,display_size_a.y);\r\nvec2 pattern_size_b=vec2(display_size_b.x*toScale/tileZoomRatio,display_size_b.y);float dist=length(v_normal)*v_width2.s;float blur2=(blur+1.0/DEVICE_PIXEL_RATIO)*v_gamma_scale;\r\nfloat alpha=clamp(min(dist-(v_width2.t-blur2),v_width2.s-dist)/blur2,0.0,1.0);\r\nfloat x_a=mod(v_linesofar/pattern_size_a.x,1.0);\r\nfloat x_b=mod(v_linesofar/pattern_size_b.x,1.0);float y_a=0.5+(v_normal.y*clamp(v_width2.s,0.0,(pattern_size_a.y+2.0)/2.0)/pattern_size_a.y);\r\nfloat y_b=0.5+(v_normal.y*clamp(v_width2.s,0.0,(pattern_size_b.y+2.0)/2.0)/pattern_size_b.y);\r\nvec2 pos_a=mix(pattern_tl_a/u_texsize,pattern_br_a/u_texsize,vec2(x_a,y_a));\r\nvec2 pos_b=mix(pattern_tl_b/u_texsize,pattern_br_b/u_texsize,vec2(x_b,y_b));\r\nvec4 color=mix(texture2D(u_image,pos_a),texture2D(u_image,pos_b),u_fade);\r\ngl_FragColor=color*alpha*opacity;\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var linePatternVert = "\n#define scale 0.015873016\n#define LINE_DISTANCE_SCALE 2.0\n#define ANTIALIASING 1.0/DEVICE_PIXEL_RATIO/2.0\nattribute vec4 a_pos_normal;attribute vec4 a_data;uniform mat4 u_matrix;uniform vec2 u_gl_units_to_pixels;uniform mediump float u_ratio;varying vec2 v_normal;varying vec2 v_width2;varying float v_linesofar;varying float v_gamma_scale;\n#pragma mapbox: define lowp float blur\n#pragma mapbox: define lowp float opacity\n#pragma mapbox: define lowp float offset\n#pragma mapbox: define mediump float gapwidth\n#pragma mapbox: define mediump float width\n#pragma mapbox: define lowp vec4 pattern_from\n#pragma mapbox: define lowp vec4 pattern_to\nvoid main() {\n#pragma mapbox: initialize lowp float blur\n#pragma mapbox: initialize lowp float opacity\n#pragma mapbox: initialize lowp float offset\n#pragma mapbox: initialize mediump float gapwidth\n#pragma mapbox: initialize mediump float width\n#pragma mapbox: initialize mediump vec4 pattern_from\n#pragma mapbox: initialize mediump vec4 pattern_to\nvec2 a_extrude=a_data.xy-128.0;float a_direction=mod(a_data.z,4.0)-1.0;float a_linesofar=(floor(a_data.z/4.0)+a_data.w*64.0)*LINE_DISTANCE_SCALE;vec2 pos=a_pos_normal.xy;mediump vec2 normal=a_pos_normal.zw;v_normal=normal;gapwidth=gapwidth/2.0;float halfwidth=width/2.0;offset=-1.0*offset;float inset=gapwidth+(gapwidth > 0.0 ? ANTIALIASING : 0.0);float outset=gapwidth+halfwidth*(gapwidth > 0.0 ? 2.0 : 1.0)+(halfwidth==0.0 ? 0.0 : ANTIALIASING);mediump vec2 dist=outset*a_extrude*scale;mediump float u=0.5*a_direction;mediump float t=1.0-abs(u);mediump vec2 offset2=offset*a_extrude*scale*normal.y*mat2(t,-u,u,t);vec4 projected_extrude=u_matrix*vec4(dist/u_ratio,0.0,0.0);gl_Position=u_matrix*vec4(pos+offset2/u_ratio,0.0,1.0)+projected_extrude;float extrude_length_without_perspective=length(dist);float extrude_length_with_perspective=length(projected_extrude.xy/gl_Position.w*u_gl_units_to_pixels);v_gamma_scale=extrude_length_without_perspective/extrude_length_with_perspective;v_linesofar=a_linesofar;v_width2=vec2(outset,inset);}";
+var linePatternVert = "\n#define scale 0.015873016\n#define LINE_DISTANCE_SCALE 2.0\n#define ANTIALIASING 1.0/DEVICE_PIXEL_RATIO/2.0\r\nattribute vec4 a_pos_normal;\r\nattribute vec4 a_data;\r\nuniform mat4 u_matrix;\r\nuniform vec2 u_gl_units_to_pixels;\r\nuniform mediump float u_ratio;\r\nvarying vec2 v_normal;\r\nvarying vec2 v_width2;\r\nvarying float v_linesofar;\r\nvarying float v_gamma_scale;\r\n#pragma mapbox: define lowp float blur\r\n#pragma mapbox: define lowp float opacity\r\n#pragma mapbox: define lowp float offset\r\n#pragma mapbox: define mediump float gapwidth\r\n#pragma mapbox: define mediump float width\r\n#pragma mapbox: define lowp vec4 pattern_from\r\n#pragma mapbox: define lowp vec4 pattern_to\r\nvoid main() {\r\n#pragma mapbox: initialize lowp float blur\r\n#pragma mapbox: initialize lowp float opacity\r\n#pragma mapbox: initialize lowp float offset\r\n#pragma mapbox: initialize mediump float gapwidth\r\n#pragma mapbox: initialize mediump float width\r\n#pragma mapbox: initialize mediump vec4 pattern_from\r\n#pragma mapbox: initialize mediump vec4 pattern_to\r\nvec2 a_extrude=a_data.xy-128.0;\r\nfloat a_direction=mod(a_data.z,4.0)-1.0;\r\nfloat a_linesofar=(floor(a_data.z/4.0)+a_data.w*64.0)*LINE_DISTANCE_SCALE;vec2 pos=a_pos_normal.xy;mediump vec2 normal=a_pos_normal.zw;\r\nv_normal=normal;gapwidth=gapwidth/2.0;\r\nfloat halfwidth=width/2.0;\r\noffset=-1.0*offset;\r\nfloat inset=gapwidth+(gapwidth > 0.0 ? ANTIALIASING : 0.0);\r\nfloat outset=gapwidth+halfwidth*(gapwidth > 0.0 ? 2.0 : 1.0)+(halfwidth==0.0 ? 0.0 : ANTIALIASING);mediump vec2 dist=outset*a_extrude*scale;mediump float u=0.5*a_direction;\r\nmediump float t=1.0-abs(u);\r\nmediump vec2 offset2=offset*a_extrude*scale*normal.y*mat2(t,-u,u,t);\r\nvec4 projected_extrude=u_matrix*vec4(dist/u_ratio,0.0,0.0);\r\ngl_Position=u_matrix*vec4(pos+offset2/u_ratio,0.0,1.0)+projected_extrude;float extrude_length_without_perspective=length(dist);\r\nfloat extrude_length_with_perspective=length(projected_extrude.xy/gl_Position.w*u_gl_units_to_pixels);\r\nv_gamma_scale=extrude_length_without_perspective/extrude_length_with_perspective;\r\nv_linesofar=a_linesofar;\r\nv_width2=vec2(outset,inset);\r\n}";
 
-var lineSDFFrag = "uniform sampler2D u_image;uniform float u_sdfgamma;uniform float u_mix;varying vec2 v_normal;varying vec2 v_width2;varying vec2 v_tex_a;varying vec2 v_tex_b;varying float v_gamma_scale;\n#pragma mapbox: define highp vec4 color\n#pragma mapbox: define lowp float blur\n#pragma mapbox: define lowp float opacity\n#pragma mapbox: define mediump float width\n#pragma mapbox: define lowp float floorwidth\nvoid main() {\n#pragma mapbox: initialize highp vec4 color\n#pragma mapbox: initialize lowp float blur\n#pragma mapbox: initialize lowp float opacity\n#pragma mapbox: initialize mediump float width\n#pragma mapbox: initialize lowp float floorwidth\nfloat dist=length(v_normal)*v_width2.s;float blur2=(blur+1.0/DEVICE_PIXEL_RATIO)*v_gamma_scale;float alpha=clamp(min(dist-(v_width2.t-blur2),v_width2.s-dist)/blur2,0.0,1.0);float sdfdist_a=texture2D(u_image,v_tex_a).a;float sdfdist_b=texture2D(u_image,v_tex_b).a;float sdfdist=mix(sdfdist_a,sdfdist_b,u_mix);alpha*=smoothstep(0.5-u_sdfgamma/floorwidth,0.5+u_sdfgamma/floorwidth,sdfdist);gl_FragColor=color*(alpha*opacity);\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var lineSDFFrag = "uniform sampler2D u_image;\r\nuniform float u_sdfgamma;\r\nuniform float u_mix;\r\nvarying vec2 v_normal;\r\nvarying vec2 v_width2;\r\nvarying vec2 v_tex_a;\r\nvarying vec2 v_tex_b;\r\nvarying float v_gamma_scale;\r\n#pragma mapbox: define highp vec4 color\r\n#pragma mapbox: define lowp float blur\r\n#pragma mapbox: define lowp float opacity\r\n#pragma mapbox: define mediump float width\r\n#pragma mapbox: define lowp float floorwidth\r\nvoid main() {\r\n#pragma mapbox: initialize highp vec4 color\r\n#pragma mapbox: initialize lowp float blur\r\n#pragma mapbox: initialize lowp float opacity\r\n#pragma mapbox: initialize mediump float width\r\n#pragma mapbox: initialize lowp float floorwidth\nfloat dist=length(v_normal)*v_width2.s;float blur2=(blur+1.0/DEVICE_PIXEL_RATIO)*v_gamma_scale;\r\nfloat alpha=clamp(min(dist-(v_width2.t-blur2),v_width2.s-dist)/blur2,0.0,1.0);\r\nfloat sdfdist_a=texture2D(u_image,v_tex_a).a;\r\nfloat sdfdist_b=texture2D(u_image,v_tex_b).a;\r\nfloat sdfdist=mix(sdfdist_a,sdfdist_b,u_mix);\r\nalpha*=smoothstep(0.5-u_sdfgamma/floorwidth,0.5+u_sdfgamma/floorwidth,sdfdist);\r\ngl_FragColor=color*(alpha*opacity);\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var lineSDFVert = "\n#define scale 0.015873016\n#define LINE_DISTANCE_SCALE 2.0\n#define ANTIALIASING 1.0/DEVICE_PIXEL_RATIO/2.0\nattribute vec4 a_pos_normal;attribute vec4 a_data;uniform mat4 u_matrix;uniform mediump float u_ratio;uniform vec2 u_patternscale_a;uniform float u_tex_y_a;uniform vec2 u_patternscale_b;uniform float u_tex_y_b;uniform vec2 u_gl_units_to_pixels;varying vec2 v_normal;varying vec2 v_width2;varying vec2 v_tex_a;varying vec2 v_tex_b;varying float v_gamma_scale;\n#pragma mapbox: define highp vec4 color\n#pragma mapbox: define lowp float blur\n#pragma mapbox: define lowp float opacity\n#pragma mapbox: define mediump float gapwidth\n#pragma mapbox: define lowp float offset\n#pragma mapbox: define mediump float width\n#pragma mapbox: define lowp float floorwidth\nvoid main() {\n#pragma mapbox: initialize highp vec4 color\n#pragma mapbox: initialize lowp float blur\n#pragma mapbox: initialize lowp float opacity\n#pragma mapbox: initialize mediump float gapwidth\n#pragma mapbox: initialize lowp float offset\n#pragma mapbox: initialize mediump float width\n#pragma mapbox: initialize lowp float floorwidth\nvec2 a_extrude=a_data.xy-128.0;float a_direction=mod(a_data.z,4.0)-1.0;float a_linesofar=(floor(a_data.z/4.0)+a_data.w*64.0)*LINE_DISTANCE_SCALE;vec2 pos=a_pos_normal.xy;mediump vec2 normal=a_pos_normal.zw;v_normal=normal;gapwidth=gapwidth/2.0;float halfwidth=width/2.0;offset=-1.0*offset;float inset=gapwidth+(gapwidth > 0.0 ? ANTIALIASING : 0.0);float outset=gapwidth+halfwidth*(gapwidth > 0.0 ? 2.0 : 1.0)+(halfwidth==0.0 ? 0.0 : ANTIALIASING);mediump vec2 dist=outset*a_extrude*scale;mediump float u=0.5*a_direction;mediump float t=1.0-abs(u);mediump vec2 offset2=offset*a_extrude*scale*normal.y*mat2(t,-u,u,t);vec4 projected_extrude=u_matrix*vec4(dist/u_ratio,0.0,0.0);gl_Position=u_matrix*vec4(pos+offset2/u_ratio,0.0,1.0)+projected_extrude;float extrude_length_without_perspective=length(dist);float extrude_length_with_perspective=length(projected_extrude.xy/gl_Position.w*u_gl_units_to_pixels);v_gamma_scale=extrude_length_without_perspective/extrude_length_with_perspective;v_tex_a=vec2(a_linesofar*u_patternscale_a.x/floorwidth,normal.y*u_patternscale_a.y+u_tex_y_a);v_tex_b=vec2(a_linesofar*u_patternscale_b.x/floorwidth,normal.y*u_patternscale_b.y+u_tex_y_b);v_width2=vec2(outset,inset);}";
+var lineSDFVert = "\n#define scale 0.015873016\n#define LINE_DISTANCE_SCALE 2.0\n#define ANTIALIASING 1.0/DEVICE_PIXEL_RATIO/2.0\r\nattribute vec4 a_pos_normal;\r\nattribute vec4 a_data;\r\nuniform mat4 u_matrix;\r\nuniform mediump float u_ratio;\r\nuniform vec2 u_patternscale_a;\r\nuniform float u_tex_y_a;\r\nuniform vec2 u_patternscale_b;\r\nuniform float u_tex_y_b;\r\nuniform vec2 u_gl_units_to_pixels;\r\nvarying vec2 v_normal;\r\nvarying vec2 v_width2;\r\nvarying vec2 v_tex_a;\r\nvarying vec2 v_tex_b;\r\nvarying float v_gamma_scale;\r\n#pragma mapbox: define highp vec4 color\r\n#pragma mapbox: define lowp float blur\r\n#pragma mapbox: define lowp float opacity\r\n#pragma mapbox: define mediump float gapwidth\r\n#pragma mapbox: define lowp float offset\r\n#pragma mapbox: define mediump float width\r\n#pragma mapbox: define lowp float floorwidth\r\nvoid main() {\r\n#pragma mapbox: initialize highp vec4 color\r\n#pragma mapbox: initialize lowp float blur\r\n#pragma mapbox: initialize lowp float opacity\r\n#pragma mapbox: initialize mediump float gapwidth\r\n#pragma mapbox: initialize lowp float offset\r\n#pragma mapbox: initialize mediump float width\r\n#pragma mapbox: initialize lowp float floorwidth\r\nvec2 a_extrude=a_data.xy-128.0;\r\nfloat a_direction=mod(a_data.z,4.0)-1.0;\r\nfloat a_linesofar=(floor(a_data.z/4.0)+a_data.w*64.0)*LINE_DISTANCE_SCALE;\r\nvec2 pos=a_pos_normal.xy;mediump vec2 normal=a_pos_normal.zw;\r\nv_normal=normal;gapwidth=gapwidth/2.0;\r\nfloat halfwidth=width/2.0;\r\noffset=-1.0*offset;\r\nfloat inset=gapwidth+(gapwidth > 0.0 ? ANTIALIASING : 0.0);\r\nfloat outset=gapwidth+halfwidth*(gapwidth > 0.0 ? 2.0 : 1.0)+(halfwidth==0.0 ? 0.0 : ANTIALIASING);mediump vec2 dist=outset*a_extrude*scale;mediump float u=0.5*a_direction;\r\nmediump float t=1.0-abs(u);\r\nmediump vec2 offset2=offset*a_extrude*scale*normal.y*mat2(t,-u,u,t);\r\nvec4 projected_extrude=u_matrix*vec4(dist/u_ratio,0.0,0.0);\r\ngl_Position=u_matrix*vec4(pos+offset2/u_ratio,0.0,1.0)+projected_extrude;float extrude_length_without_perspective=length(dist);\r\nfloat extrude_length_with_perspective=length(projected_extrude.xy/gl_Position.w*u_gl_units_to_pixels);\r\nv_gamma_scale=extrude_length_without_perspective/extrude_length_with_perspective;\r\nv_tex_a=vec2(a_linesofar*u_patternscale_a.x/floorwidth,normal.y*u_patternscale_a.y+u_tex_y_a);\r\nv_tex_b=vec2(a_linesofar*u_patternscale_b.x/floorwidth,normal.y*u_patternscale_b.y+u_tex_y_b);\r\nv_width2=vec2(outset,inset);\r\n}";
 
-var rasterFrag = "uniform float u_fade_t;uniform float u_opacity;uniform sampler2D u_image0;uniform sampler2D u_image1;varying vec2 v_pos0;varying vec2 v_pos1;uniform float u_brightness_low;uniform float u_brightness_high;uniform float u_saturation_factor;uniform float u_contrast_factor;uniform vec3 u_spin_weights;void main() {vec4 color0=texture2D(u_image0,v_pos0);vec4 color1=texture2D(u_image1,v_pos1);if (color0.a > 0.0) {color0.rgb=color0.rgb/color0.a;}if (color1.a > 0.0) {color1.rgb=color1.rgb/color1.a;}vec4 color=mix(color0,color1,u_fade_t);color.a*=u_opacity;vec3 rgb=color.rgb;rgb=vec3(dot(rgb,u_spin_weights.xyz),dot(rgb,u_spin_weights.zxy),dot(rgb,u_spin_weights.yzx));float average=(color.r+color.g+color.b)/3.0;rgb+=(average-rgb)*u_saturation_factor;rgb=(rgb-0.5)*u_contrast_factor+0.5;vec3 u_high_vec=vec3(u_brightness_low,u_brightness_low,u_brightness_low);vec3 u_low_vec=vec3(u_brightness_high,u_brightness_high,u_brightness_high);gl_FragColor=vec4(mix(u_high_vec,u_low_vec,rgb)*color.a,color.a);\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var rasterFrag = "uniform float u_fade_t;\r\nuniform float u_opacity;\r\nuniform sampler2D u_image0;\r\nuniform sampler2D u_image1;\r\nvarying vec2 v_pos0;\r\nvarying vec2 v_pos1;\r\nuniform float u_brightness_low;\r\nuniform float u_brightness_high;\r\nuniform float u_saturation_factor;\r\nuniform float u_contrast_factor;\r\nuniform vec3 u_spin_weights;\r\nvoid main() {vec4 color0=texture2D(u_image0,v_pos0);\r\nvec4 color1=texture2D(u_image1,v_pos1);\r\nif (color0.a > 0.0) {\r\ncolor0.rgb=color0.rgb/color0.a;\r\n}\r\nif (color1.a > 0.0) {\r\ncolor1.rgb=color1.rgb/color1.a;\r\n}\r\nvec4 color=mix(color0,color1,u_fade_t);\r\ncolor.a*=u_opacity;\r\nvec3 rgb=color.rgb;rgb=vec3(\r\ndot(rgb,u_spin_weights.xyz),dot(rgb,u_spin_weights.zxy),dot(rgb,u_spin_weights.yzx));float average=(color.r+color.g+color.b)/3.0;\r\nrgb+=(average-rgb)*u_saturation_factor;rgb=(rgb-0.5)*u_contrast_factor+0.5;vec3 u_high_vec=vec3(u_brightness_low,u_brightness_low,u_brightness_low);\r\nvec3 u_low_vec=vec3(u_brightness_high,u_brightness_high,u_brightness_high);\r\ngl_FragColor=vec4(mix(u_high_vec,u_low_vec,rgb)*color.a,color.a);\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var rasterVert = "uniform mat4 u_matrix;uniform vec2 u_tl_parent;uniform float u_scale_parent;uniform float u_buffer_scale;attribute vec2 a_pos;attribute vec2 a_texture_pos;varying vec2 v_pos0;varying vec2 v_pos1;void main() {gl_Position=u_matrix*vec4(a_pos,0,1);v_pos0=(((a_texture_pos/8192.0)-0.5)/u_buffer_scale )+0.5;v_pos1=(v_pos0*u_scale_parent)+u_tl_parent;}";
+var rasterVert = "uniform mat4 u_matrix;\r\nuniform vec2 u_tl_parent;\r\nuniform float u_scale_parent;\r\nuniform float u_buffer_scale;\r\nattribute vec2 a_pos;\r\nattribute vec2 a_texture_pos;\r\nvarying vec2 v_pos0;\r\nvarying vec2 v_pos1;\r\nvoid main() {\r\ngl_Position=u_matrix*vec4(a_pos,0,1);v_pos0=(((a_texture_pos/8192.0)-0.5)/u_buffer_scale )+0.5;\r\nv_pos1=(v_pos0*u_scale_parent)+u_tl_parent;\r\n}";
 
-var symbolIconFrag = "uniform sampler2D u_texture;\n#pragma mapbox: define lowp float opacity\nvarying vec2 v_tex;varying float v_fade_opacity;void main() {\n#pragma mapbox: initialize lowp float opacity\nlowp float alpha=opacity*v_fade_opacity;gl_FragColor=texture2D(u_texture,v_tex)*alpha;\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var symbolIconFrag = "uniform sampler2D u_texture;\r\n#pragma mapbox: define lowp float opacity\r\nvarying vec2 v_tex;\r\nvarying float v_fade_opacity;\r\nvoid main() {\r\n#pragma mapbox: initialize lowp float opacity\r\nlowp float alpha=opacity*v_fade_opacity;\r\ngl_FragColor=texture2D(u_texture,v_tex)*alpha;\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var symbolIconVert = "const float PI=3.141592653589793;attribute vec4 a_pos_offset;attribute vec4 a_data;attribute vec3 a_projected_pos;attribute float a_fade_opacity;uniform bool u_is_size_zoom_constant;uniform bool u_is_size_feature_constant;uniform highp float u_size_t;uniform highp float u_size;uniform highp float u_camera_to_center_distance;uniform highp float u_pitch;uniform bool u_rotate_symbol;uniform highp float u_aspect_ratio;uniform float u_fade_change;\n#pragma mapbox: define lowp float opacity\nuniform mat4 u_matrix;uniform mat4 u_label_plane_matrix;uniform mat4 u_gl_coord_matrix;uniform bool u_is_text;uniform bool u_pitch_with_map;uniform vec2 u_texsize;varying vec2 v_tex;varying float v_fade_opacity;void main() {\n#pragma mapbox: initialize lowp float opacity\nvec2 a_pos=a_pos_offset.xy;vec2 a_offset=a_pos_offset.zw;vec2 a_tex=a_data.xy;vec2 a_size=a_data.zw;highp float segment_angle=-a_projected_pos[2];float size;if (!u_is_size_zoom_constant && !u_is_size_feature_constant) {size=mix(a_size[0],a_size[1],u_size_t)/256.0;} else if (u_is_size_zoom_constant && !u_is_size_feature_constant) {size=a_size[0]/256.0;} else if (!u_is_size_zoom_constant && u_is_size_feature_constant) {size=u_size;} else {size=u_size;}vec4 projectedPoint=u_matrix*vec4(a_pos,0,1);highp float camera_to_anchor_distance=projectedPoint.w;highp float distance_ratio=u_pitch_with_map ?\ncamera_to_anchor_distance/u_camera_to_center_distance :\nu_camera_to_center_distance/camera_to_anchor_distance;highp float perspective_ratio=clamp(0.5+0.5*distance_ratio,0.0,4.0);size*=perspective_ratio;float fontScale=u_is_text ? size/24.0 : size;highp float symbol_rotation=0.0;if (u_rotate_symbol) {vec4 offsetProjectedPoint=u_matrix*vec4(a_pos+vec2(1,0),0,1);vec2 a=projectedPoint.xy/projectedPoint.w;vec2 b=offsetProjectedPoint.xy/offsetProjectedPoint.w;symbol_rotation=atan((b.y-a.y)/u_aspect_ratio,b.x-a.x);}highp float angle_sin=sin(segment_angle+symbol_rotation);highp float angle_cos=cos(segment_angle+symbol_rotation);mat2 rotation_matrix=mat2(angle_cos,-1.0*angle_sin,angle_sin,angle_cos);vec4 projected_pos=u_label_plane_matrix*vec4(a_projected_pos.xy,0.0,1.0);gl_Position=u_gl_coord_matrix*vec4(projected_pos.xy/projected_pos.w+rotation_matrix*(a_offset/32.0*fontScale),0.0,1.0);v_tex=a_tex/u_texsize;vec2 fade_opacity=unpack_opacity(a_fade_opacity);float fade_change=fade_opacity[1] > 0.5 ? u_fade_change :-u_fade_change;v_fade_opacity=max(0.0,min(1.0,fade_opacity[0]+fade_change));}";
+var symbolIconVert = "const float PI=3.141592653589793;\r\nattribute vec4 a_pos_offset;\r\nattribute vec4 a_data;\r\nattribute vec3 a_projected_pos;\r\nattribute float a_fade_opacity;\r\nuniform bool u_is_size_zoom_constant;\r\nuniform bool u_is_size_feature_constant;\r\nuniform highp float u_size_t;uniform highp float u_size;uniform highp float u_camera_to_center_distance;\r\nuniform highp float u_pitch;\r\nuniform bool u_rotate_symbol;\r\nuniform highp float u_aspect_ratio;\r\nuniform float u_fade_change;\r\n#pragma mapbox: define lowp float opacity\r\nuniform mat4 u_matrix;\r\nuniform mat4 u_label_plane_matrix;\r\nuniform mat4 u_gl_coord_matrix;\r\nuniform bool u_is_text;\r\nuniform bool u_pitch_with_map;\r\nuniform vec2 u_texsize;\r\nvarying vec2 v_tex;\r\nvarying float v_fade_opacity;\r\nvoid main() {\r\n#pragma mapbox: initialize lowp float opacity\r\nvec2 a_pos=a_pos_offset.xy;\r\nvec2 a_offset=a_pos_offset.zw;\r\nvec2 a_tex=a_data.xy;\r\nvec2 a_size=a_data.zw;\r\nhighp float segment_angle=-a_projected_pos[2];\r\nfloat size;\r\nif (!u_is_size_zoom_constant && !u_is_size_feature_constant) {\r\nsize=mix(a_size[0],a_size[1],u_size_t)/256.0;\r\n} else if (u_is_size_zoom_constant && !u_is_size_feature_constant) {\r\nsize=a_size[0]/256.0;\r\n} else if (!u_is_size_zoom_constant && u_is_size_feature_constant) {\r\nsize=u_size;\r\n} else {\r\nsize=u_size;\r\n}\r\nvec4 projectedPoint=u_matrix*vec4(a_pos,0,1);\r\nhighp float camera_to_anchor_distance=projectedPoint.w;highp float distance_ratio=u_pitch_with_map ?\r\ncamera_to_anchor_distance/u_camera_to_center_distance :\r\nu_camera_to_center_distance/camera_to_anchor_distance;\r\nhighp float perspective_ratio=clamp(\r\n0.5+0.5*distance_ratio,0.0,4.0);\r\nsize*=perspective_ratio;\r\nfloat fontScale=u_is_text ? size/24.0 : size;\r\nhighp float symbol_rotation=0.0;\r\nif (u_rotate_symbol) {vec4 offsetProjectedPoint=u_matrix*vec4(a_pos+vec2(1,0),0,1);\r\nvec2 a=projectedPoint.xy/projectedPoint.w;\r\nvec2 b=offsetProjectedPoint.xy/offsetProjectedPoint.w;\r\nsymbol_rotation=atan((b.y-a.y)/u_aspect_ratio,b.x-a.x);\r\n}\r\nhighp float angle_sin=sin(segment_angle+symbol_rotation);\r\nhighp float angle_cos=cos(segment_angle+symbol_rotation);\r\nmat2 rotation_matrix=mat2(angle_cos,-1.0*angle_sin,angle_sin,angle_cos);\r\nvec4 projected_pos=u_label_plane_matrix*vec4(a_projected_pos.xy,0.0,1.0);\r\ngl_Position=u_gl_coord_matrix*vec4(projected_pos.xy/projected_pos.w+rotation_matrix*(a_offset/32.0*fontScale),0.0,1.0);\r\nv_tex=a_tex/u_texsize;\r\nvec2 fade_opacity=unpack_opacity(a_fade_opacity);\r\nfloat fade_change=fade_opacity[1] > 0.5 ? u_fade_change :-u_fade_change;\r\nv_fade_opacity=max(0.0,min(1.0,fade_opacity[0]+fade_change));\r\n}";
 
-var symbolSDFFrag = "#define SDF_PX 8.0\n#define EDGE_GAMMA 0.105/DEVICE_PIXEL_RATIO\nuniform bool u_is_halo;\n#pragma mapbox: define highp vec4 fill_color\n#pragma mapbox: define highp vec4 halo_color\n#pragma mapbox: define lowp float opacity\n#pragma mapbox: define lowp float halo_width\n#pragma mapbox: define lowp float halo_blur\nuniform sampler2D u_texture;uniform highp float u_gamma_scale;uniform bool u_is_text;varying vec2 v_data0;varying vec3 v_data1;void main() {\n#pragma mapbox: initialize highp vec4 fill_color\n#pragma mapbox: initialize highp vec4 halo_color\n#pragma mapbox: initialize lowp float opacity\n#pragma mapbox: initialize lowp float halo_width\n#pragma mapbox: initialize lowp float halo_blur\nvec2 tex=v_data0.xy;float gamma_scale=v_data1.x;float size=v_data1.y;float fade_opacity=v_data1[2];float fontScale=u_is_text ? size/24.0 : size;lowp vec4 color=fill_color;highp float gamma=EDGE_GAMMA/(fontScale*u_gamma_scale);lowp float buff=(256.0-64.0)/256.0;if (u_is_halo) {color=halo_color;gamma=(halo_blur*1.19/SDF_PX+EDGE_GAMMA)/(fontScale*u_gamma_scale);buff=(6.0-halo_width/fontScale)/SDF_PX;}lowp float dist=texture2D(u_texture,tex).a;highp float gamma_scaled=gamma*gamma_scale;highp float alpha=smoothstep(buff-gamma_scaled,buff+gamma_scaled,dist);gl_FragColor=color*(alpha*opacity*fade_opacity);\n#ifdef OVERDRAW_INSPECTOR\ngl_FragColor=vec4(1.0);\n#endif\n}";
+var symbolSDFFrag = "#define SDF_PX 8.0\r\n#define EDGE_GAMMA 0.105/DEVICE_PIXEL_RATIO\r\nuniform bool u_is_halo;\r\n#pragma mapbox: define highp vec4 fill_color\r\n#pragma mapbox: define highp vec4 halo_color\r\n#pragma mapbox: define lowp float opacity\r\n#pragma mapbox: define lowp float halo_width\r\n#pragma mapbox: define lowp float halo_blur\r\nuniform sampler2D u_texture;\r\nuniform highp float u_gamma_scale;\r\nuniform bool u_is_text;\r\nvarying vec2 v_data0;\r\nvarying vec3 v_data1;\r\nvoid main() {\r\n#pragma mapbox: initialize highp vec4 fill_color\r\n#pragma mapbox: initialize highp vec4 halo_color\r\n#pragma mapbox: initialize lowp float opacity\r\n#pragma mapbox: initialize lowp float halo_width\r\n#pragma mapbox: initialize lowp float halo_blur\r\nvec2 tex=v_data0.xy;\r\nfloat gamma_scale=v_data1.x;\r\nfloat size=v_data1.y;\r\nfloat fade_opacity=v_data1[2];\r\nfloat fontScale=u_is_text ? size/24.0 : size;\r\nlowp vec4 color=fill_color;\r\nhighp float gamma=EDGE_GAMMA/(fontScale*u_gamma_scale);\r\nlowp float buff=(256.0-64.0)/256.0;\r\nif (u_is_halo) {\r\ncolor=halo_color;\r\ngamma=(halo_blur*1.19/SDF_PX+EDGE_GAMMA)/(fontScale*u_gamma_scale);\r\nbuff=(6.0-halo_width/fontScale)/SDF_PX;\r\n}\r\nlowp float dist=texture2D(u_texture,tex).a;\r\nhighp float gamma_scaled=gamma*gamma_scale;\r\nhighp float alpha=smoothstep(buff-gamma_scaled,buff+gamma_scaled,dist);\r\ngl_FragColor=color*(alpha*opacity*fade_opacity);\r\n#ifdef OVERDRAW_INSPECTOR\r\ngl_FragColor=vec4(1.0);\r\n#endif\r\n}";
 
-var symbolSDFVert = "const float PI=3.141592653589793;attribute vec4 a_pos_offset;attribute vec4 a_data;attribute vec3 a_projected_pos;attribute float a_fade_opacity;uniform bool u_is_size_zoom_constant;uniform bool u_is_size_feature_constant;uniform highp float u_size_t;uniform highp float u_size;\n#pragma mapbox: define highp vec4 fill_color\n#pragma mapbox: define highp vec4 halo_color\n#pragma mapbox: define lowp float opacity\n#pragma mapbox: define lowp float halo_width\n#pragma mapbox: define lowp float halo_blur\nuniform mat4 u_matrix;uniform mat4 u_label_plane_matrix;uniform mat4 u_gl_coord_matrix;uniform bool u_is_text;uniform bool u_pitch_with_map;uniform highp float u_pitch;uniform bool u_rotate_symbol;uniform highp float u_aspect_ratio;uniform highp float u_camera_to_center_distance;uniform float u_fade_change;uniform vec2 u_texsize;varying vec2 v_data0;varying vec3 v_data1;void main() {\n#pragma mapbox: initialize highp vec4 fill_color\n#pragma mapbox: initialize highp vec4 halo_color\n#pragma mapbox: initialize lowp float opacity\n#pragma mapbox: initialize lowp float halo_width\n#pragma mapbox: initialize lowp float halo_blur\nvec2 a_pos=a_pos_offset.xy;vec2 a_offset=a_pos_offset.zw;vec2 a_tex=a_data.xy;vec2 a_size=a_data.zw;highp float segment_angle=-a_projected_pos[2];float size;if (!u_is_size_zoom_constant && !u_is_size_feature_constant) {size=mix(a_size[0],a_size[1],u_size_t)/256.0;} else if (u_is_size_zoom_constant && !u_is_size_feature_constant) {size=a_size[0]/256.0;} else if (!u_is_size_zoom_constant && u_is_size_feature_constant) {size=u_size;} else {size=u_size;}vec4 projectedPoint=u_matrix*vec4(a_pos,0,1);highp float camera_to_anchor_distance=projectedPoint.w;highp float distance_ratio=u_pitch_with_map ?\ncamera_to_anchor_distance/u_camera_to_center_distance :\nu_camera_to_center_distance/camera_to_anchor_distance;highp float perspective_ratio=clamp(0.5+0.5*distance_ratio,0.0,4.0);size*=perspective_ratio;float fontScale=u_is_text ? size/24.0 : size;highp float symbol_rotation=0.0;if (u_rotate_symbol) {vec4 offsetProjectedPoint=u_matrix*vec4(a_pos+vec2(1,0),0,1);vec2 a=projectedPoint.xy/projectedPoint.w;vec2 b=offsetProjectedPoint.xy/offsetProjectedPoint.w;symbol_rotation=atan((b.y-a.y)/u_aspect_ratio,b.x-a.x);}highp float angle_sin=sin(segment_angle+symbol_rotation);highp float angle_cos=cos(segment_angle+symbol_rotation);mat2 rotation_matrix=mat2(angle_cos,-1.0*angle_sin,angle_sin,angle_cos);vec4 projected_pos=u_label_plane_matrix*vec4(a_projected_pos.xy,0.0,1.0);gl_Position=u_gl_coord_matrix*vec4(projected_pos.xy/projected_pos.w+rotation_matrix*(a_offset/32.0*fontScale),0.0,1.0);float gamma_scale=gl_Position.w;vec2 tex=a_tex/u_texsize;vec2 fade_opacity=unpack_opacity(a_fade_opacity);float fade_change=fade_opacity[1] > 0.5 ? u_fade_change :-u_fade_change;float interpolated_fade_opacity=max(0.0,min(1.0,fade_opacity[0]+fade_change));v_data0=vec2(tex.x,tex.y);v_data1=vec3(gamma_scale,size,interpolated_fade_opacity);}";
+var symbolSDFVert = "const float PI=3.141592653589793;\r\nattribute vec4 a_pos_offset;\r\nattribute vec4 a_data;\r\nattribute vec3 a_projected_pos;\r\nattribute float a_fade_opacity;uniform bool u_is_size_zoom_constant;\r\nuniform bool u_is_size_feature_constant;\r\nuniform highp float u_size_t;uniform highp float u_size;\n#pragma mapbox: define highp vec4 fill_color\r\n#pragma mapbox: define highp vec4 halo_color\r\n#pragma mapbox: define lowp float opacity\r\n#pragma mapbox: define lowp float halo_width\r\n#pragma mapbox: define lowp float halo_blur\r\nuniform mat4 u_matrix;\r\nuniform mat4 u_label_plane_matrix;\r\nuniform mat4 u_gl_coord_matrix;\r\nuniform bool u_is_text;\r\nuniform bool u_pitch_with_map;\r\nuniform highp float u_pitch;\r\nuniform bool u_rotate_symbol;\r\nuniform highp float u_aspect_ratio;\r\nuniform highp float u_camera_to_center_distance;\r\nuniform float u_fade_change;\r\nuniform vec2 u_texsize;\r\nvarying vec2 v_data0;\r\nvarying vec3 v_data1;\r\nvoid main() {\r\n#pragma mapbox: initialize highp vec4 fill_color\r\n#pragma mapbox: initialize highp vec4 halo_color\r\n#pragma mapbox: initialize lowp float opacity\r\n#pragma mapbox: initialize lowp float halo_width\r\n#pragma mapbox: initialize lowp float halo_blur\r\nvec2 a_pos=a_pos_offset.xy;\r\nvec2 a_offset=a_pos_offset.zw;\r\nvec2 a_tex=a_data.xy;\r\nvec2 a_size=a_data.zw;\r\nhighp float segment_angle=-a_projected_pos[2];\r\nfloat size;\r\nif (!u_is_size_zoom_constant && !u_is_size_feature_constant) {\r\nsize=mix(a_size[0],a_size[1],u_size_t)/256.0;\r\n} else if (u_is_size_zoom_constant && !u_is_size_feature_constant) {\r\nsize=a_size[0]/256.0;\r\n} else if (!u_is_size_zoom_constant && u_is_size_feature_constant) {\r\nsize=u_size;\r\n} else {\r\nsize=u_size;\r\n}\r\nvec4 projectedPoint=u_matrix*vec4(a_pos,0,1);\r\nhighp float camera_to_anchor_distance=projectedPoint.w;highp float distance_ratio=u_pitch_with_map ?\r\ncamera_to_anchor_distance/u_camera_to_center_distance :\r\nu_camera_to_center_distance/camera_to_anchor_distance;\r\nhighp float perspective_ratio=clamp(\r\n0.5+0.5*distance_ratio,0.0,4.0);\r\nsize*=perspective_ratio;\r\nfloat fontScale=u_is_text ? size/24.0 : size;\r\nhighp float symbol_rotation=0.0;\r\nif (u_rotate_symbol) {vec4 offsetProjectedPoint=u_matrix*vec4(a_pos+vec2(1,0),0,1);\r\nvec2 a=projectedPoint.xy/projectedPoint.w;\r\nvec2 b=offsetProjectedPoint.xy/offsetProjectedPoint.w;\r\nsymbol_rotation=atan((b.y-a.y)/u_aspect_ratio,b.x-a.x);\r\n}\r\nhighp float angle_sin=sin(segment_angle+symbol_rotation);\r\nhighp float angle_cos=cos(segment_angle+symbol_rotation);\r\nmat2 rotation_matrix=mat2(angle_cos,-1.0*angle_sin,angle_sin,angle_cos);\r\nvec4 projected_pos=u_label_plane_matrix*vec4(a_projected_pos.xy,0.0,1.0);\r\ngl_Position=u_gl_coord_matrix*vec4(projected_pos.xy/projected_pos.w+rotation_matrix*(a_offset/32.0*fontScale),0.0,1.0);\r\nfloat gamma_scale=gl_Position.w;\r\nvec2 tex=a_tex/u_texsize;\r\nvec2 fade_opacity=unpack_opacity(a_fade_opacity);\r\nfloat fade_change=fade_opacity[1] > 0.5 ? u_fade_change :-u_fade_change;\r\nfloat interpolated_fade_opacity=max(0.0,min(1.0,fade_opacity[0]+fade_change));\r\nv_data0=vec2(tex.x,tex.y);\r\nv_data1=vec3(gamma_scale,size,interpolated_fade_opacity);\r\n}";
 
 var prelude = compile(preludeFrag, preludeVert);
 var background = compile(backgroundFrag, backgroundVert);

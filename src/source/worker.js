@@ -42,6 +42,7 @@ export default class Worker {
 
         this.workerSourceTypes = {
             vector: VectorTileWorkerSource,
+            mbtiles: VectorTileWorkerSource,
             geojson: GeoJSONWorkerSource
         };
 

@@ -24,7 +24,7 @@ class MBTilesSource extends VectorTileSource {
         if ('sqlitePlugin' in self) {
             return new Promise(function (resolve, reject) {
                 try {
-                    window.sqlitePlugin.openDatabase({ name: file, iosDatabaseLocation: 'Documents' }, resolve, reject);
+                    window.sqlitePlugin.openDatabase({ name: dbLocation, iosDatabaseLocation: 'Documents' }, resolve, reject);
                 } catch (e) {
                     reject(e);
                 }

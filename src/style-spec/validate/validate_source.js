@@ -72,7 +72,7 @@ export default function validateSource(options) {
         return validateEnum({
             key: `${key}.type`,
             value: value.type,
-            valueSpec: {values: ['vector', 'raster', 'raster-dem', 'geojson', 'video', 'image']},
+            valueSpec: {values: ['vector', 'raster', 'raster-dem', 'geojson', 'video', 'image', 'mbtiles']},
             style,
             styleSpec
         });

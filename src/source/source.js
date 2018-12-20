@@ -90,7 +90,7 @@ import geojson from '../source/geojson_source';
 import video from '../source/video_source';
 import image from '../source/image_source';
 import canvas from '../source/canvas_source';
-import mbtile from '../source/mbtile_source';
+import mbtiles from '../source/mbtile_source';
 
 import type {SourceSpecification} from '../style-spec/types';
 
@@ -102,7 +102,7 @@ const sourceTypes = {
     video,
     image,
     canvas,
-    mbtile
+    mbtiles
 };
 
 /*

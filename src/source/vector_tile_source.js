@@ -19,7 +19,7 @@ import type {Cancelable} from '../types/cancelable';
 import type {VectorSourceSpecification} from '../style-spec/types';
 
 class VectorTileSource extends Evented implements Source {
-    type: 'vector';
+    type: 'vector' | 'mbtiles';
     id: string;
     minzoom: number;
     maxzoom: number;

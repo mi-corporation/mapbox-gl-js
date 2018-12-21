@@ -13,6 +13,8 @@
     "import"
   ],
   "rules": {
+    "linebreak-style": "off",
+    
     // temporarily disabled due to https://github.com/babel/babel-eslint/issues/485
     "no-use-before-define": "off",
 

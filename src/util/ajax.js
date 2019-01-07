@@ -89,7 +89,8 @@ export const getReferrer = typeof WorkerGlobalScope !== 'undefined' &&
 
 function makeFetchRequest(requestParameters: RequestParameters, callback: ResponseCallback<any>): Cancelable {
     // aah: fetch can't fetch file:/// urls but XHR can
-    if (requestParameters.url && (requestParameters.url.indexOf("file:") === 0)) {
+    const absUrl = new URL(requestParameters.url, window.location.href).href;
+    if (requestParameters.url && (absUrl.indexOf("file:") === 0)) {
         return makeXMLHttpRequest(requestParameters, callback);
     }
 

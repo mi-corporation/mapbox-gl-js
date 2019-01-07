@@ -21,9 +21,9 @@ class MBTilesSource extends VectorTileSource {
         this.db = this.openDatabase(options.path);
     }
 
-    openDatabase(dbLocation: string) {
+    openDatabase(dbLocation: string): Promise<any> {
         if ('sqlitePlugin' in window) {
-            return new Promise<any>((resolve, reject) => {
+            return new Promise((resolve, reject) => {
                 try {
                     window.sqlitePlugin.openDatabase({ name: dbLocation, iosDatabaseLocation: 'Documents' }, resolve, reject);
                 } catch (e) {

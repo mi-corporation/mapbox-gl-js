@@ -7214,7 +7214,8 @@
                       'raster-dem',
                       'geojson',
                       'video',
-                      'image'
+                      'image',
+                      'mbtiles'
                   ]
               },
               style: style,

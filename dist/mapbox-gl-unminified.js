@@ -879,6 +879,10 @@ var getReferrer = typeof WorkerGlobalScope !== 'undefined' && typeof self !== 'u
     }
 };
 function makeFetchRequest(requestParameters, callback) {
+    var absUrl = new URL(requestParameters.url, self.location.href).href;
+    if (requestParameters.url && absUrl.indexOf('file:') === 0) {
+        return makeXMLHttpRequest(requestParameters, callback);
+    }
     var controller = new self.AbortController();
     var request = new self.Request(requestParameters.url, {
         method: requestParameters.method || 'GET',
@@ -6282,7 +6286,8 @@ function validateSource(options) {
                     'raster-dem',
                     'geojson',
                     'video',
-                    'image'
+                    'image',
+                    'mbtiles'
                 ]
             },
             style: style,
@@ -23776,7 +23781,7 @@ var string2buf = function (str) {
     return buf;
 };
 function buf2binstring(buf, len) {
-    if (len < 65534) {
+    if (len < 65537) {
         if (buf.subarray && STR_APPLY_UIA_OK || !buf.subarray && STR_APPLY_OK) {
             return String.fromCharCode.apply(null, common.shrinkBuf(buf, len));
         }
@@ -24107,51 +24112,36 @@ for (var i = 0, len = code.length; i < len; ++i) {
 }
 revLookup['-'.charCodeAt(0)] = 62;
 revLookup['_'.charCodeAt(0)] = 63;
-function getLens(b64) {
+function placeHoldersCount(b64) {
     var len = b64.length;
     if (len % 4 > 0) {
         throw new Error('Invalid string. Length must be a multiple of 4');
     }
-    var validLen = b64.indexOf('=');
-    if (validLen === -1)
-        { validLen = len; }
-    var placeHoldersLen = validLen === len ? 0 : 4 - validLen % 4;
-    return [
-        validLen,
-        placeHoldersLen
-    ];
+    return b64[len - 2] === '=' ? 2 : b64[len - 1] === '=' ? 1 : 0;
 }
 function byteLength(b64) {
-    var lens = getLens(b64);
-    var validLen = lens[0];
-    var placeHoldersLen = lens[1];
-    return (validLen + placeHoldersLen) * 3 / 4 - placeHoldersLen;
-}
-function _byteLength(b64, validLen, placeHoldersLen) {
-    return (validLen + placeHoldersLen) * 3 / 4 - placeHoldersLen;
+    return b64.length * 3 / 4 - placeHoldersCount(b64);
 }
 function toByteArray(b64) {
-    var tmp;
-    var lens = getLens(b64);
-    var validLen = lens[0];
-    var placeHoldersLen = lens[1];
-    var arr = new Arr(_byteLength(b64, validLen, placeHoldersLen));
-    var curByte = 0;
-    var len = placeHoldersLen > 0 ? validLen - 4 : validLen;
-    for (var i = 0; i < len; i += 4) {
+    var i, l, tmp, placeHolders, arr;
+    var len = b64.length;
+    placeHolders = placeHoldersCount(b64);
+    arr = new Arr(len * 3 / 4 - placeHolders);
+    l = placeHolders > 0 ? len - 4 : len;
+    var L = 0;
+    for (i = 0; i < l; i += 4) {
         tmp = revLookup[b64.charCodeAt(i)] << 18 | revLookup[b64.charCodeAt(i + 1)] << 12 | revLookup[b64.charCodeAt(i + 2)] << 6 | revLookup[b64.charCodeAt(i + 3)];
-        arr[curByte++] = tmp >> 16 & 255;
-        arr[curByte++] = tmp >> 8 & 255;
-        arr[curByte++] = tmp & 255;
+        arr[L++] = tmp >> 16 & 255;
+        arr[L++] = tmp >> 8 & 255;
+        arr[L++] = tmp & 255;
     }
-    if (placeHoldersLen === 2) {
+    if (placeHolders === 2) {
         tmp = revLookup[b64.charCodeAt(i)] << 2 | revLookup[b64.charCodeAt(i + 1)] >> 4;
-        arr[curByte++] = tmp & 255;
-    }
-    if (placeHoldersLen === 1) {
+        arr[L++] = tmp & 255;
+    } else if (placeHolders === 1) {
         tmp = revLookup[b64.charCodeAt(i)] << 10 | revLookup[b64.charCodeAt(i + 1)] << 4 | revLookup[b64.charCodeAt(i + 2)] >> 2;
-        arr[curByte++] = tmp >> 8 & 255;
-        arr[curByte++] = tmp & 255;
+        arr[L++] = tmp >> 8 & 255;
+        arr[L++] = tmp & 255;
     }
     return arr;
 }
@@ -24171,6 +24161,7 @@ function fromByteArray(uint8) {
     var tmp;
     var len = uint8.length;
     var extraBytes = len % 3;
+    var output = '';
     var parts = [];
     var maxChunkLength = 16383;
     for (var i = 0, len2 = len - extraBytes; i < len2; i += maxChunkLength) {
@@ -24178,11 +24169,17 @@ function fromByteArray(uint8) {
     }
     if (extraBytes === 1) {
         tmp = uint8[len - 1];
-        parts.push(lookup[tmp >> 2] + lookup[tmp << 4 & 63] + '==');
+        output += lookup[tmp >> 2];
+        output += lookup[tmp << 4 & 63];
+        output += '==';
     } else if (extraBytes === 2) {
         tmp = (uint8[len - 2] << 8) + uint8[len - 1];
-        parts.push(lookup[tmp >> 10] + lookup[tmp >> 4 & 63] + lookup[tmp << 2 & 63] + '=');
+        output += lookup[tmp >> 10];
+        output += lookup[tmp >> 4 & 63];
+        output += lookup[tmp << 2 & 63];
+        output += '=';
     }
+    parts.push(output);
     return parts.join('');
 }
 
@@ -24203,11 +24200,11 @@ var MBTilesSource = (function (VectorTileSource$$1) {
     MBTilesSource.prototype = Object.create( VectorTileSource$$1 && VectorTileSource$$1.prototype );
     MBTilesSource.prototype.constructor = MBTilesSource;
     MBTilesSource.prototype.openDatabase = function openDatabase (dbLocation) {
-        if ('sqlitePlugin' in self) {
+        if ('sqlitePlugin' in __chunk_1.window) {
             return new Promise(function (resolve, reject) {
                 try {
-                    window.sqlitePlugin.openDatabase({
-                        name: file,
+                    __chunk_1.window.sqlitePlugin.openDatabase({
+                        name: dbLocation,
                         iosDatabaseLocation: 'Documents'
                     }, resolve, reject);
                 } catch (e) {
@@ -24233,7 +24230,7 @@ var MBTilesSource = (function (VectorTileSource$$1) {
                         var rawData = inflate_1$1.inflate(base64Js.toByteArray(base64Data));
                         callback(undefined, base64Js.fromByteArray(rawData));
                     } else {
-                        callback(new Error('tile ' + params.join(',') + ' not found'));
+                        callback(new Error(("tile " + (params.join(',')) + " not found")));
                     }
                 });
             }, function (error) {
@@ -24254,18 +24251,18 @@ var MBTilesSource = (function (VectorTileSource$$1) {
             if (err) {
                 return callback(err);
             }
-            if (base64Data == undefined) {
+            if (base64Data === undefined || base64Data === null) {
                 return callback(new Error('empty data'));
             }
             var params = {
-                request: { url: 'data:application/x-protobuf;base64,' + base64Data },
+                request: { url: ("data:application/x-protobuf;base64," + base64Data) },
                 uid: tile.uid,
                 tileID: tile.tileID,
                 zoom: coord.z,
                 tileSize: this.tileSize * overscaling,
                 type: this.type,
                 source: this.id,
-                pixelRatio: window.devicePixelRatio || 1,
+                pixelRatio: __chunk_1.window.devicePixelRatio || 1,
                 overscaling: overscaling,
                 showCollisionBoxes: this.map.showCollisionBoxes
             };
@@ -24305,7 +24302,7 @@ var sourceTypes = {
     video: VideoSource,
     image: ImageSource,
     canvas: CanvasSource,
-    mbtile: MBTilesSource
+    mbtiles: MBTilesSource
 };
 var create = function (id, specification, dispatcher, eventedParent) {
     var source = new sourceTypes[specification.type](id, specification, dispatcher, eventedParent);

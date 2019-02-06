@@ -139,7 +139,8 @@ export const canonicalizeTileset = function(tileJSON: TileJSON, sourceURL: strin
     return canonical;
 };
 
-const urlRe = /^(\w+):\/\/([^/?]*)(\/[^?]+)?\??(.+)?/;
+// aah: Windows Web Apps have URLs like ms-appdata:// and ms-appx://, so support dashes
+const urlRe = /^([\w-]+):\/\/([^/?]*)(\/[^?]+)?\??(.+)?/;
 
 function parseUrl(url: string): UrlObject {
     const parts = url.match(urlRe);

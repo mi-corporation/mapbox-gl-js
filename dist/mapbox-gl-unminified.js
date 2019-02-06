@@ -647,7 +647,7 @@ var canonicalizeTileset = function (tileJSON, sourceURL) {
     }
     return canonical;
 };
-var urlRe = /^(\w+):\/\/([^/?]*)(\/[^?]+)?\??(.+)?/;
+var urlRe = /^([\w-]+):\/\/([^/?]*)(\/[^?]+)?\??(.+)?/;
 function parseUrl(url) {
     var parts = url.match(urlRe);
     if (!parts) {

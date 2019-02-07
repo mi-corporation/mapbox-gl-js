@@ -39,7 +39,26 @@ const config = [{
         name: 'mapboxgl',
         file: outputFile,
         format: 'umd',
-        sourcemap: production ? true : 'inline',
+        // aah: mapbox sourcemap is so big that when it's inline and we try to import mapbox
+        // into a webpack project, the library webpack uses to parse inline sourcemaps,
+        // source-map-loader, throw a call stack error in the regexp it uses to parse the data url.
+        //
+        // ERROR in ../node_modules/mapbox-gl/dist/mapbox-gl-dev.js
+        // Module build failed: RangeError: Maximum call stack size exceeded
+        //     at RegExp.exec (<anonymous>)
+        //     at Object.module.exports (C:\Users\Adam Haile\Desktop\Mi-Co\TFS\Mi-Apps\MiAppsMobile\node_modules\source-map-loader\index.js:28:35)
+        //  @ ../MiCo.MiApp.MobileClient/src/service/mapManagerMapboxUtils.ts 3:13-33
+        //  @ ../MiCo.MiApp.MobileClient/src/service/mapManager.ts
+        //  @ ../MiCo.MiApp.MobileClient/src/service/index.ts
+        //  @ ./src/loader/editTemplate.jsx
+        //  @ ./src/appRoutes.js
+        //  @ ./src/appStart.jsx
+        //  @ multi ../node_modules/webpack-dev-server/client?http://localhost:8082 ./src/appStart.jsx
+        // webpack: Failed to compile.
+        //
+        // switching to external sourcemaps as a work around
+        //sourcemap: production ? true : 'inline',
+        sourcemap: true,
         indent: false,
         intro: fs.readFileSync(require.resolve('./rollup/bundle_prelude.js'), 'utf8'),
         banner: `/* Mapbox GL JS is licensed under the 3-Clause BSD License. Full text of license: https://github.com/mapbox/mapbox-gl-js/blob/v${version}/LICENSE.txt */`
